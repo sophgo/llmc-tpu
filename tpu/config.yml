@@ -1,0 +1,15 @@
+model:
+    type: Llama
+    path: /work/gaoshe/.cache/huggingface/hub/models--NousResearch--Llama-2-7b-hf/snapshots/dacdfcde31297e34b19ee0e7532f29586d2c17bc
+quant:
+    method: Awq
+    weight:
+        bit: 4
+        symmetric: False
+        granularity: per_group
+        group_size: 64
+save:
+    save_path: ./save_awq_w4a16_qwen
+run:
+    task_name: awq_w_only
+    task_type: LLM

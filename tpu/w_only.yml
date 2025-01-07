@@ -1,0 +1,43 @@
+base:
+  seed: 42
+model:
+  type: Llama
+  path: /work/gaoshe/.cache/huggingface/hub/models--NousResearch--Llama-2-7b-hf/snapshots/dacdfcde31297e34b19ee0e7532f29586d2c17bc
+  tokenizer_mode: slow
+  torch_dtype: auto
+calib:
+  name: pileval
+  download: false
+  path: /work/gaoshe/llmc-tpu/tpu/data/LLM/cali/pileval
+  n_samples: 128
+  bs: -1
+  seq_len: 512
+  preproc: pileval_awq
+  seed: 42
+eval:
+  eval_pos:
+  - pretrain
+  - fake_quant
+  name: wikitext2
+  download: false
+  path: /work/gaoshe/llmc-tpu/tpu/data/LLM/eval/wikitext2
+  seq_len: 2048
+  bs: 1
+  inference_per_block: false
+  eval_token_consist: true
+quant:
+  method: Awq
+  weight:
+    bit: 4
+    symmetric: false
+    granularity: per_group
+    group_size: 64
+  special:
+    trans: true
+    trans_version: v2
+    weight_clip: true
+    clip_sym: true
+save:
+  save_trans: true
+  save_fake: false
+  save_path: ./save_awq_w4a16_qwen
