@@ -1,0 +1,46 @@
+base:
+    seed: &seed 42
+model:
+    type: InternVL2
+    path: model path
+    tokenizer_mode: slow
+    torch_dtype: auto
+calib:
+    name: custom_mm
+    download: False
+    path: calib path
+    apply_chat_template: True
+    add_answer: True # Defalut is False. If set it to Ture, calib data will add answers.
+    n_samples: 8
+    bs: -1
+    seq_len: 512
+    padding: True
+    seed: *seed
+eval:
+    eval_pos: [fake_quant]
+    type: vqa
+    name: mme
+    download: False
+    path: MME path
+    bs: 1
+    inference_per_block: False
+quant:
+    method: Awq
+    quant_objects: [language] # default is [language]
+    weight:
+        bit: 8
+        symmetric: True
+        granularity: per_channel
+        group_size: -1
+    special:
+        trans: True
+        # The options for "trans_version" include "v1" and "v2".
+        # But their results don't differ significantly.
+        trans_version: v2
+        weight_clip: True
+        # For 2-bit quantization, setting "clip_sym: False" will yield better results.
+        clip_sym: True
+save:
+    save_trans: True
+    save_fake: False
+    save_path: ./awq_weight_only_vlm
