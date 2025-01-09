@@ -73,7 +73,7 @@ python3 tools/download_calib_dataset.py --dataset_name pileval --save_path llmc-
 
 |模型类型| 量化算法    | 校准数据集(开源)  |测试数据集（开源）  | 
 |:-----:|:---------:|:---------------:|:---------------:|
-|  LLM  | Awq       | pileval         |      ptb        |
+|  LLM  | Awq       | pileval         |     wikitext2   |
 |  LLM  | GPTQ      | wikitext2       |     wikitext2   |
 |  VLM  | Awq       | MME             |      MME        |
 
