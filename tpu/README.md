@@ -15,12 +15,13 @@
 │   ├──VLM
 │      ├──cali
 │      ├──eval
-├── LLM                                     #LLM量化config
-│   ├── Awq.yml                             #Awq config
-│   ├── GPTQ.yml                            #GPTQ config
-├── VLM                                     #VLM量化config
-│   ├── Awq.yml                             #Awq config
-├── config.yml                              #量化参数文件
+├── config
+│   ├──LLM                                  #LLM量化config
+│      ├── Awq.yml                              #Awq config
+│      ├── GPTQ.yml                             #GPTQ config
+│   ├──VLM                                  #VLM量化config
+│      ├── Awq.yml                              #Awq config
+├── config.yml                              #量化参数文件案例
 ├── llm_quant.py                            #量化主程序
 ├── run_llmc.sh                             #量化运行脚本
 ```

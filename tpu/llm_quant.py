@@ -107,7 +107,7 @@ if __name__ == '__main__':
     #打开对应config文件
     quant_method = custom_data['quant']['method']
     task_type = custom_data['run']['task_type']
-    quant_path = f"tpu/{task_type}/{quant_method}.yml"
+    quant_path = f"tpu/config/{task_type}/{quant_method}.yml"
     task_name = custom_data['run']['task_name']
     with open(quant_path,"r") as file:
         data = yaml.load(file, Loader=OrderedLoader)
