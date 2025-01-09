@@ -1,0 +1,19 @@
+[
+    {
+        "audio": "audios/guess_age_gender.wav",
+        "image": "images/0a3035bfca2ab920.jpg",
+        "answer": "Yes, I can guess that you are female and in your twenties."
+    },
+    {
+        "image": "images/0a3035bfca2ab920.jpg",
+        "question": "Is this an image of Ortigia? Please answer yes or no."
+    },
+    {
+        "audio": "audios/translate_to_chinese.wav",
+        "answer": "每个人都希望被欣赏，所以如果你欣赏某人，不要把它保密。"
+    },
+    {
+        "question": "How are you?",
+        "answer": "I am fine."
+    }
+]

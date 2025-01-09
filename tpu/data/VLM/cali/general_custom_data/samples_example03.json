@@ -1,0 +1,19 @@
+[
+    {
+        "image": "images/0a3035bfca2ab920.jpg",
+        "question": "Is this an image of Ortigia? Please answer yes or no.",
+        "answer": "Yes"
+    },
+    {
+        "image": [
+            "images/0a3035bfca2ab920.jpg",
+            "images/0ab2ed007db301d5.jpg"
+        ],
+        "question": "What are the similarities and differences between these two images.",
+        "answer": "OK. The similarities are A. The differences are B."
+    },
+    {
+        "question": "How are you?",
+        "answer": "I am fine."
+    }
+]

@@ -1,0 +1,17 @@
+[
+    {
+        "image": "images/0a3035bfca2ab920.jpg",
+        "question": "Is this an image of Ortigia? Please answer yes or no.",
+        "answer": "Yes"
+    },
+    {
+        "image": "images/0a3035bfca2ab920.jpg",
+        "question": "Is this an image of Montmayeur castle? Please answer yes or no.",
+        "answer": "No"
+    },
+    {
+        "image": "images/0ab2ed007db301d5.jpg",
+        "question": "Is this a picture of Highgate Cemetery? Please answer yes or no.",
+        "answer": "Yes"
+    }
+]

@@ -1,0 +1,14 @@
+[
+    {
+        "question": "Hello. How are you?",
+        "answer": "Fine"
+    },
+    {
+        "question": "What is AI?",
+        "answer": "AI is Artificial Intelligence."
+    },
+    {
+        "question": "Please tell me where China is?",
+        "answer": "Asia"
+    }
+]

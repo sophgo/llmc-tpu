@@ -1,0 +1,23 @@
+[
+    {
+        "audio": "audios/guess_age_gender.wav",
+        "answer": "Yes, I can guess that you are female and in your twenties."
+    },
+    {
+        "audio": "audios/translate_to_chinese.wav",
+        "answer": "每个人都希望被欣赏，所以如果你欣赏某人，不要把它保密。"
+    },
+    {
+        "audio": "audios/glass-breaking-151256.mp3",
+        "question": "What's that sound?",
+        "answer": "It is the sound of glass breaking."
+    },
+    {
+        "audio": [
+            "audios/glass-breaking-151256.mp3",
+            "audios/1272-128104-0000.flac"
+        ],
+        "question": "Describe these two audios?",
+        "answer": "The first audio contains the sound of glass shattering, and the second audio is a speech where someone is saying 'Mister Quiller is the apostle of the middle classes and we are glad to welcome his gospel."
+    }
+]
