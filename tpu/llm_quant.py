@@ -78,7 +78,7 @@ def add_cali_eval_config(quant_config, args):
         custom_data['eval'] = {}
         if task_type == "LLM":
             if quant_method =="Awq":
-                custom_data['eval']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/eval/wikitext2"
+                custom_data['eval']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/eval/ptb"
             elif quant_method == "GPTQ":
                 custom_data['eval']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/eval/wikitext2"
         elif task_type == "VLM":
