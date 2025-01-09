@@ -1,136 +1,163 @@
-# LLMC: Towards Accurate and Efficient LLM Compression
+# llmc_tpu
 
-<img src="./imgs/llmc.png" alt="llmc" style="zoom:35%;" />
+本项目支持了多种仅权重量化(weight_only)量化算法，用以支持大语言模型的量化，其最后会用经过量化算法调整后的权重替换原始输入模型权重，替换之后的权重更适合于TPU-MLIR的RTN group量化，相比于直接经过TPU-MLIR的RTN group量化会有更高的精度。
 
-<div align="center">
+下面是具体的操作流程。
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
-[![arXiv](https://img.shields.io/badge/LLMC-2405.06001-b31b1b)](https://arxiv.org/abs/2405.06001)
-[![GitHub Stars](https://img.shields.io/github/stars/ModelTC/llmc.svg?style=social&label=Star&maxAge=60)](https://github.com/ModelTC/llmc)
-![visitors](https://komarev.com/ghpvc/?username=llmc&label=visitors)
-[![Discord Banner](https://img.shields.io/discord/1139835312592392214?logo=discord&logoColor=white)](https://discord.com/invite/NfJzbkK3jY)
-[![QQ](https://img.shields.io/badge/QQ-EB1923?logo=tencent-qq&logoColor=white)](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=I9IGPWWj8uuRXWH3_ELWjouf6gkIMgUl&authKey=GA3WbFAsm90ePJf%2FCbc7ZyXXq4ShQktlBaLxgqS5yuSPAsr3%2BDKMRdosUiLYoilO&noverify=0&group_code=526192592)
-[![Doc](https://img.shields.io/badge/docs-English-99cc2)](https://llmc-en.readthedocs.io/en/latest/)
-[![Doc](https://img.shields.io/badge/文档-中文-99cc2)](https://llmc-zhcn.readthedocs.io/en/latest/)
-
-</div>
-
-**\[ English | [中文](README_zh.md) | [日本語](README_ja.md) \]**
-
-**LLMC** is an off-the-shell tool designed for compressing LLM, leveraging state-of-the-art compression algorithms to enhance efficiency and reduce model size without compromising performance.
-
-**English doc** is [here](https://llmc-en.readthedocs.io/en/latest/).
-
-**Chinese doc** is [here](https://llmc-zhcn.readthedocs.io/en/latest/).
-
-**Docker hub** is [here](https://hub.docker.com/r/llmcompression/llmc).
-
-**Aliyun docker**: `registry.cn-hangzhou.aliyuncs.com/yongyang/llmcompression:[tag]`
-
-You can download the Docker image that can run llmc with the following command. Users in mainland China are recommended to use Alibaba Cloud Docker.
-
-docker hub
-
+# 目录说明
 ```
-docker pull llmcompression/llmc:pure-latest
+.
+├── README.md
+├── data                                    
+│   ├──LLM
+│      ├──cali                              #校准数据集
+│      ├──eval                              #推理数据集
+│   ├──VLM
+│      ├──cali
+│      ├──eval
+├── config
+│   ├──LLM                                  #LLM量化config
+│      ├── Awq.yml                              #Awq config
+│      ├── GPTQ.yml                             #GPTQ config
+│   ├──VLM                                  #VLM量化config
+│      ├── Awq.yml                              #Awq config
+├── config.yml                              #量化参数文件案例
+├── llm_quant.py                            #量化主程序
+├── run_llmc.sh                             #量化运行脚本
 ```
+----------------------------
 
-aliyun docker
+#  llmc-tpu量化流程
 
+
+
+# 【阶段一】选择校准数据集
+
+## 注意点
+* 校准集可以是开源数据集或者业务数据集，如果模型经过下游业务数据集微调，则需要选用业务数据集做校准
+
+### 一：开源数据集下载
+
+如果不指定下游业务数据集，可以使用默认的开源数据集做校准。具体的数据集选取依赖于量化算法，如下所示：
+
+|模型类型| 量化算法   | 校准数据集（开源） |
+|:-----:|:---------:|:---------------:|
+|  LLM  | Awq       | pileval         |
+|  LLM  | GPTQ      | wikitext2       |
+|  VLM  | Awq       | MME             |
+
+校准数据集的选取与模型类型和量化算法相关，例如如果量化的是LLM模型，使用的是Awq算法，通常推荐使用pileval数据集。由于这些开源数据集比较大，本文档提供了专门的下载命令，可以下载对应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_calib_dataset.py和download_eval_dataset.py两个python脚本，分别用于下载校准集和测试集。
+
+下面以pileval为例，给出对应的python demo:
 ```
-docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/llmcompression:pure-latest
+python3 tools/download_calib_dataset.py --dataset_name pileval --save_path llmc-tpu path/tpu/data/LLM/cali
 ```
+其中save_path要输入上面目录中的LLM/cali目录路径，这主要是为了后续运行量化脚本时方便按照该路径直接调用校准集。
 
-**Community**:
+### 二：业务数据集校准
 
-- [Discord Server](https://discord.com/invite/NfJzbkK3jY)
-- [Tencent QQ Group](http://qm.qq.com/cgi-bin/qm/qr?_wv=1027&k=I9IGPWWj8uuRXWH3_ELWjouf6gkIMgUl&authKey=GA3WbFAsm90ePJf%2FCbc7ZyXXq4ShQktlBaLxgqS5yuSPAsr3%2BDKMRdosUiLYoilO&noverify=0&group_code=526192592)
+如果模型经过下游业务数据集微调，在选择校准集时，通常应该选择业务数据集。
 
-## Latest News
+如果是LLM，将业务数据集放置于上述LLM/cali目录下即可。至于数据集具体的格式，用户可以将一条一条数据文本，写到txt文件里面，每一行代表一条文本数据，使用上述的配置，可以实现自定义数据集的校准。
 
-- **Nov 20, 2024:** 🔥 We now fully support the quantization of ✨`DeepSeekv2(2.5)` and other `MOE` models, as well as ✨`Qwen2VL`, `Llama3.2`, and other `VLM` models. Supported quantization methods include ✅integer quantization, ✅floating-point quantization, and advanced algorithms like ✅AWQ, ✅GPTQ, ✅SmoothQuant, and ✅Quarot.
+如果是VLM，将业务数据集放置于上述VLM/cali目录下即可。至于数据集具体的格式，可以参考VLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里需要注意一定，最后的json文件应该命名为samples.json。
 
-- **Nov 12, 2024:** 🔥 We have added support for 💥`static per-tensor activation quantization` across various models and algorithms, covering ✅integer quantization and ✅floating-point quantization to further optimize performance and efficiency. Additionally, we now support exporting ✨`real quantized models` and using the [VLLM](https://github.com/vllm-project/vllm) and [SGLang](https://github.com/sgl-project/sglang) backends for inference acceleration. For more details, refer to the [VLLM documentation](https://llmc-en.readthedocs.io/en/latest/backend/vllm.html) and [SGLang documentation](https://llmc-en.readthedocs.io/en/latest/backend/sglang.html).
+# 【阶段二】选取测试数据集
 
-- **Sep 26, 2024:** 🔥 We now support exporting 💥`FP8 quantized(E4M3, E5M2)` models from 🚀`LLMC` to advanced inference backends such as [VLLM](https://github.com/vllm-project/vllm) and [SGLang](https://github.com/sgl-project/sglang). For detailed usage, please refer to the [VLLM documentation](https://llmc-en.readthedocs.io/en/latest/backend/vllm.html) and [SGLang documentation](https://llmc-en.readthedocs.io/en/latest/backend/sglang.html).
+## 注意点
+* 测试数据集主要用来评估当前模型的精度表现，包括预训练（pretrain）模型或者量化（fake_quant）模型的精度
 
-- **Sep 24, 2024:** 🔥 We have officially released ✅INT4 and ✅INT8 models of ✨`Llama-3.1-405B`, quantized using 🚀`LLMC` in `save_lightllm` mode. You can download the model parameters [here](https://huggingface.co/Dongz/llama31-405b-quant).
+### 一：开源数据集下载
 
-- **Sep 23, 2024:** 🔥 We now support exporting ✨`real quantized(INT4, INT8)` models from 🚀`LLMC` to advanced inference backends such as [VLLM](https://github.com/vllm-project/vllm), [SGLang](https://github.com/sgl-project/sglang), [AutoAWQ](https://github.com/casper-hansen/AutoAWQ), and [MLC-LLM](https://github.com/mlc-ai/mlc-llm) for quantized inference deployment, enabling ✨`reduced memory usage` and ✨`faster inference speeds`.
-  For detailed usage, please refer to the [VLLM documentation](https://llmc-en.readthedocs.io/en/latest/backend/vllm.html), [SGLang documentation](https://llmc-en.readthedocs.io/en/latest/backend/sglang.html), [AutoAWQ documentation](https://llmc-en.readthedocs.io/en/latest/backend/autoawq.html), and [MLC-LLM documentation](https://llmc-en.readthedocs.io/en/latest/backend/mlcllm.html).
+如果不指定下游业务数据集，可以使用默认的开源数据集做测试。具体的数据集选取依赖于量化算法，如下所示：
 
-- **Sep 9, 2024:** 🔥 We provide some configs of our best practice towards superior performance (see Best Practice [here](https://llmc-en.readthedocs.io/en/latest/)).
+|模型类型| 量化算法    | 校准数据集(开源)  |测试数据集（开源）  | 
+|:-----:|:---------:|:---------------:|:---------------:|
+|  LLM  | Awq       | pileval         |     wikitext2   |
+|  LLM  | GPTQ      | wikitext2       |     wikitext2   |
+|  VLM  | Awq       | MME             |      MME        |
 
-* **Sep 3, 2024:** 🔥 We support [opencompass](https://github.com/open-compass/opencompass) 🤗 to eval 🚀`LLMC` model. Follow this [doc](https://llmc-en.readthedocs.io/en/latest/advanced/model_test_v2.html) and have a try!
+测试数据集的选取与模型类型、量化算法和校准数据集相关，例如如果量化的是LLM模型，使用的是Awq算法，并且使用pileval做校准数据集，这种情况下推荐用ptb做测试数据集。绝大多数情况下校准数据集和测试数据集应该保持一致。
 
-* **Aug 22, 2024:** 🔥We support lots of small language models, including current SOTA [SmolLM](https://huggingface.co/collections/HuggingFaceTB/smollm-6695016cad7167254ce15966)(see [Supported Model List](#supported-model-list)).
+由于这些开源数据集比较大，本文档提供了专门的下载命令，可以下载对应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_eval_dataset.py python脚本，用于下载测试数据集。
 
-* **Aug 22, 2024:** 🔥 Additionally, we also support down stream task evaluation through our modified [lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness) 🤗. Specifically, people can first employ `save_trans` mode(see `save` part in [Configuration](https://llmc-en.readthedocs.io/en/latest/configs.html)) to save a weight modified model. After obtaining the transformed model, they can directly evaluate the quantized model referring to [run_lm_eval.sh](scripts/run_lm_eval.sh). More details can be found in [here](https://llmc-en.readthedocs.io/en/latest/advanced/model_test_v1.html).
+下面以ptb为例，给出对应的python demo:
+```
+python3 tools/download_eval_dataset.py --dataset_name ptb --save_path llmc-tpu path/tpu/data/LLM/eval
+```
+其中save_path要输入上面目录中的LLM/eval目录路径，这主要是为了后续运行量化脚本时方便按照该路径直接调用测试集。
 
-* **Jul 23, 2024:** 🍺🍺🍺 We release a brand new version benchmark paper:
+### 二：业务数据集测试
 
-  [**LLMC: Benchmarking Large Language Model Quantization with a Versatile Compression Toolkit**](https://arxiv.org/abs/2405.06001v2).
+如果模型经过下游业务数据集校准，在选择测试集时，通常应该选择业务数据集测试。
 
-  [Ruihao Gong\*](https://xhplus.github.io/), [Yang Yong\*](https://github.com/helloyongyang), [Shiqiao Gu\*](https://github.com/gushiqiao), [Yushi Huang\*](https://github.com/Harahan), [Chengtao Lv](https://scholar.google.com/citations?user=r8vseSUAAAAJ&hl=en), [Yunchen Zhang](https://scholar.google.com/citations?user=glkWFyUAAAAJ&hl=en), [Xianglong Liu📧](https://xlliu-beihang.github.io/), [Dacheng Tao](https://scholar.google.com/citations?user=RwlJNLcAAAAJ&hl=en)
+如果是LLM，将业务数据集放置于上述LLM/eval目录下即可。至于数据集具体的格式，用户可以将一条一条数据文本，写到txt文件里面，每一行代表一条文本数据，使用上述的配置，可以实现自定义数据集的测试。
 
-  (\* denotes equal contribution, 📧 denotes corresponding author.)
+如果是VLM，将业务数据集放置于上述VLM/eval目录下即可。至于数据集具体的格式，可以参考VLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里需要注意一定，最后的json文件应该命名为samples.json。
 
-<details close>
-<summary>Previous News</summary>
+# 【阶段三】配置量化config文件
 
-- **Jul 16, 2024:** 🔥We support Wanda/Naive(Magnitude) for llm sparsification and layer-wise mix bits quantization now!
+## 注意点
+* 量化config文件包括了量化过程中所需的量化配置，用户可按照需求进行选择，同时为了对齐TPU硬件的配置也会对某些参数做出限制，具体可看下文详细介绍。
 
-- **Jul 14, 2024:** 🔥We support rotation based quantization QuaRot now!
+### 一：量化config文件介绍
 
-- **May 17, 2024:** 🚀 We support some advanced large models, e.g., LLaVA, Mixtral, LLaMA V3 and Qwen V2 now. Have a try!
+```yaml
+base:
+    seed: &seed 42
+model:
+    type: Qwen2 # 设置模型名,可支持Llama,Qwen2,Llava,Gemma2等模型
+    path: # 设置模型权重路径
+    torch_dtype: auto
+calib:
+    name: pileval
+    download: False
+    path: # 设置校准数据集路径
+    n_samples: 128
+    bs: 1
+    seq_len: 512
+    preproc: pileval_awq
+    seed: *seed
+eval:
+    eval_pos: [pretrain, transformed, fake_quant]
+    name: wikitext2
+    download: False
+    path: # 设置测试数据集路径
+    bs: 1
+    seq_len: 2048
+quant:
+    method: Awq
+    weight:
+        bit: 4
+        symmetric: False
+        granularity: per_group
+        group_size: 64
+    special:
+        trans: True
+        # The options for "trans_version" include "v1" and "v2".
+        # But their results don't differ significantly.
+        trans_version: v2
+        weight_clip: True
+        # For 2-bit quantization, setting "clip_sym: False" will yield better results.
+        clip_sym: True
+save:
+    save_trans: True # 当设置为True，可以保存下调整之后的浮点权重
+    save_path: ./save
+run:
+    task_name: awq_w_only
+    task_type: LLM
+```
+上面是以Awq算法为例构建的一个完整的config文件。为了简便用户操作，用户无需关注全部参数，仅需关注特定的参数即可。
 
-- **May 13, 2024:** 🍺🍺🍺 We release our quantization benchmark paper:
+* model。在model类参数中，用户需要指定type和path,后者是模型当前存放的路径；前者对应当前需要被量化的模型的类型，目前可支持的模型类型有：
 
-  [**LLM-QBench: A Benchmark Towards the Best Practice for Post-training Quantization of Large Language Models**](https://arxiv.org/abs/2405.06001).
+✅ [Bloom](https://huggingface.co/bigscience/bloom)
 
-  [Ruihao Gong\*](https://xhplus.github.io/), [Yang Yong\*](https://github.com/helloyongyang), [Shiqiao Gu\*](https://github.com/gushiqiao), [Yushi Huang\*](https://github.com/Harahan), [Yunchen Zhang](https://scholar.google.com/citations?user=glkWFyUAAAAJ&hl=en), [Xianglong Liu📧](https://xlliu-beihang.github.io/), [Dacheng Tao](https://scholar.google.com/citations?user=RwlJNLcAAAAJ&hl=en)
+✅ [Llama](https://github.com/facebookresearch/llama)
 
-  (\* denotes equal contribution, 📧 denotes corresponding author.)
+✅ [Starcoder](https://github.com/bigcode-project/starcoder)
 
-  <div align=center>
-   <img src="./imgs/best_practice.png" alt="comp" width="800" />
-  </div>
-
-  We modularly and fairly benchmark the quantization techniques considering calibration cost, inference efficiency, and quantized accuracy. Near 600 experiments on diverse models and datasets provide three insightful takeaways
-  on the calibration data, algorithm pipeline, and quantization configuration selection. Based on the takeaways, a best practice for the LLM PTQ pipeline is designed, to achieve the best accuracy and efficiency performance balance
-  under various scenarios.
-
-- **Mar 7, 2024:** 🚀 We release the quantization part of a powerful and efficient LLM compression tool. Notably, our benchmark paper is coming soon😊.
-
-</details>
-
-## Highlight Feature
-
-- 💥**Comprehensive Algorithm Support**: Provides a broad range of ✨`SOTA compression algorithms`, including ✅quantization, ✅mixed-precision quantization, and ✅sparsity, while maintaining accuracy consistent with the original repositories. ✨`Quantization best practices` (see 🚀`Best Practices` [here](https://llmc-en.readthedocs.io/en/latest/)) are also available to ensure optimal performance and efficiency.
-
-- 💥**Supported Formats**: Supports both ✨`quantization` (integer and floating-point) and ✨`sparsity`, specifically including ✅weight-activation, ✅weight-only, ✅mixed-precision quantization, as well as ✅structured and ✅unstructured sparsity.
-
-- 💥**Wide Model Support**: Offers support for a diverse array of ✨`LLM models`, including ✅LLama, ✅Mistral, ✅InternLM2, ✅Qwen2, among others, as well as ✅MOE(DeepSeekv2, Deepseekv2.5) and ✅VLM(Llama3.2-vision, Qwen2-vl) models (see [Supported Model List](#supported-model-list)).
-
-- 💥**Multi-backend Compatibility**: Seamlessly integrates with various backends for enhanced deployment flexibility. Multiple quantization settings and model formats are compatible with a wide range of backends and hardware platforms, such as ✅VLLM, ✅Sglang, ✅LightLLM, ✅MLC-LLM, and ✅AutoAWQ, making it highly versatile(see Section `Backend` [here](https://llmc-en.readthedocs.io/en/latest/)).
-
-- 💥**Performance Efficiency**: Enables quantization of large LLMs, such as ✨`Llama3.1-405B` and ✨`DeepSeekV2-236B`, with PPL evaluation on a `single A100/H100/H800 GPU`.
-
-## Usage
-
-Please refer to the 🚀`Quick Start` section in the [documentation](https://llmc-en.readthedocs.io/en/latest/).
-
-## Supported Model List
-
-✅ [BLOOM](https://huggingface.co/bigscience/bloom)
-
-✅ [LLaMA](https://github.com/facebookresearch/llama)
-
-✅ [LLaMA V2](https://huggingface.co/meta-llama)
-
-✅ [StarCoder](https://github.com/bigcode-project/starcoder)
-
-✅ [OPT](https://huggingface.co/docs/transformers/model_doc/opt)
+✅ [Opt](https://huggingface.co/docs/transformers/model_doc/opt)
 
 ✅ [Falcon](https://huggingface.co/docs/transformers/model_doc/falcon)
 
@@ -138,153 +165,101 @@ Please refer to the 🚀`Quick Start` section in the [documentation](https://llm
 
 ✅ [Mistral](https://huggingface.co/docs/transformers/model_doc/mistral)
 
-✅ [LLaMA V3](https://huggingface.co/meta-llama)
+✅ [Qwen](https://github.com/QwenLM/Qwen)
 
-✅ [Mixtral](https://huggingface.co/docs/transformers/model_doc/mixtral)
+✅ [Qwen2](https://github.com/QwenLM/Qwen2)
 
-✅ [Qwen V2](https://github.com/QwenLM/Qwen2)
+✅ [Llava](https://github.com/haotian-liu/LLaVA)
 
-✅ [LLaVA](https://github.com/haotian-liu/LLaVA)
-
-✅ [InternLM2.5](https://huggingface.co/internlm)
-
-✅ [StableLM](https://github.com/Stability-AI/StableLM)
+✅ [StableLm](https://github.com/Stability-AI/StableLM)
 
 ✅ [Gemma2](https://huggingface.co/docs/transformers/main/en/model_doc/gemma2)
 
-✅ [Phi2](https://huggingface.co/microsoft/phi-2)
+✅ [Phi](https://huggingface.co/microsoft/phi)
 
-✅ [Phi 1.5](https://huggingface.co/microsoft/phi-1_5)
+✅ [Phi3](https://huggingface.co/microsoft/phi-3)
 
 ✅ [MiniCPM](https://github.com/OpenBMB/MiniCPM)
 
 ✅ [SmolLM](https://huggingface.co/collections/HuggingFaceTB/smollm-6695016cad7167254ce15966)
 
-✅ [DeepSeekv2.5](https://huggingface.co/deepseek-ai/DeepSeek-V2.5)
+✅ [DeepseekV2](https://huggingface.co/deepseek-ai/DeepSeek-V2.5)
 
-✅ [LLaMA V3.2 Vision](https://huggingface.co/meta-llama/Llama-3.2-11B-Vision)
+✅ [Qwen2Moe](https://huggingface.co/Qwen/Qwen1.5-MoE-A2.7B)
 
-✅ [Qwen MOE](https://huggingface.co/Qwen/Qwen1.5-MoE-A2.7B)
-
-✅ [Qwen2-VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)
+✅ [Qwen2VL](https://huggingface.co/Qwen/Qwen2-VL-7B-Instruct)
 
 ✅ [InternVL2](https://huggingface.co/OpenGVLab/InternVL2-2B)
 
-You can add your own model type referring to files under `llmc/models/*.py`.
+✅ [ChatGLM] 
 
-## Supported Backend List
+用户也可自行添加模型type在`llmc/models/*.py`.
 
-✅ [VLLM](https://github.com/vllm-project/vllm)
+* calib。calib类参数主要指定了和校准集相关的参数，如果用户使用开源数据集校准，仅需根据上文步骤下载指定的开源数据集到指定位置，其余参数可不关心。如果使用业务数据集校准，则需要给出业务数据集路径,填写到上面config文件中calib类下的path。
 
-✅ [LightLLM](https://github.com/ModelTC/lightllm)
+* eval。eval类参数主要指定了和测试集相关的参数，如果用户使用开源数据集测试，仅需根据上文步骤下载指定的开源数据集到指定位置，其余参数可不关心。如果使用业务数据集做测试，则需要给出业务数据集路径,填写到上面config文件中eval类下的path。eval类参数中的eval_pos会分别指定不同的模型做精度测试，其中pretrain是预训练模型，transformed模型是权重经过调整的浮点模型，fake_quant是量化模型。
 
-✅ [Sglang](https://github.com/sgl-project/sglang)
+* quant。quant类参数主要关注method和weight类参数。method指定了所需的量化方法，上面config选择了Awq算法，该算法也是当前使用最为普遍的量化算法。weight类参数指定了weight量化的相关配置，由于TPU-MLIR仅支持weight only量化，因此这里只需要关注weight量化配置即可。在这些量化参数中，为了对齐TPU-MLIR量化配置，需要限制某些参数选取，具体如下所示：
 
-✅ [MLC-LLM](https://github.com/mlc-ai/mlc-llm)
+| bit   | symmetric | granularity                    |   group_size                   | 
+|:-----:|:---------:|:------------------------------:|:------------------------------:|
+|  4    | False     | per_channel                    |      -1                        |
+|  8    | True      | per_channel or per_group       |-1 or 任意（需对齐TPU-MLIR粒度）   |
 
-✅ [AutoAWQ](https://github.com/casper-hansen/AutoAWQ)
+* save。save_trans该参数表示是否需要保存量化调整之后的浮点权重，经过量化调整之后的权重相比于原始浮点权重更适合于RTN量化。save_path表示保存带有量化调整浮点权重的模型的路径。用户可以将新生成的浮点模型经过TPU-MLIR编译器weight_only RTN量化生成量化模型，最终部署在TPU硬件上。在同等量化配置下经过TPU-MLIR量化，llmc-tpu量化调整的浮点模型相比原始浮点模型，最终产生的量化模型精度更高。
 
-## Supported Algorithm List
+* run。其中task_name可以由用户自行确定，task_type可分为LLM和VLM，依据自身模型类型选择即可。
 
-### Quantization
+### 二：config文件配置案例
 
-✅ Naive
-
-✅ [AWQ](https://arxiv.org/abs/2306.00978)
-
-✅ [GPTQ](https://arxiv.org/abs/2210.17323)
-
-✅ [SmoothQuant](https://arxiv.org/abs/2211.10438)
-
-✅ [OS+](https://arxiv.org/abs/2304.09145)
-
-✅ [OmniQuant](https://arxiv.org/abs/2308.13137)
-
-✅ [NormTweaking](https://arxiv.org/abs/2309.02784)
-
-✅ [AdaDim](https://arxiv.org/pdf/2309.15531.pdf)
-
-✅ [QUIK](https://arxiv.org/abs/2310.09259)
-
-✅ [SpQR](https://arxiv.org/abs/2306.03078)
-
-✅ [DGQ](https://arxiv.org/abs/2310.04836)
-
-✅ [OWQ](https://arxiv.org/abs/2306.02272)
-
-✅ [LLM.int8()](https://arxiv.org/abs/2208.07339)
-
-✅ [HQQ](https://mobiusml.github.io/hqq_blog/)
-
-✅ [QuaRot](https://arxiv.org/abs/2404.00456)
-
-✅ [SpinQuant](https://arxiv.org/abs/2405.16406) **([See this branch](https://github.com/ModelTC/llmc/tree/dev_spinquant))**
-
-✅ [TesseraQ](https://arxiv.org/abs/2410.19103)
-
-### Pruning
-
-✅ Naive(Magnitude)
-
-✅ [Wanda](https://arxiv.org/abs/2306.11695)
-
-✅ [ShortGPT](https://arxiv.org/abs/2403.03853)
-
-## Acknowledgments
-
-We develop our code referring to the following repos:
-
-- https://github.com/mit-han-lab/llm-awq
-- https://github.com/mit-han-lab/smoothquant
-- https://github.com/OpenGVLab/OmniQuant
-- https://github.com/IST-DASLab/gptq
-- https://github.com/ModelTC/Outlier_Suppression_Plus
-- https://github.com/IST-DASLab/QUIK
-- https://github.com/Vahe1994/SpQR
-- https://github.com/ilur98/DGQ
-- https://github.com/xvyaward/owq
-- https://github.com/TimDettmers/bitsandbytes
-- https://github.com/mobiusml/hqq
-- [https://github.com/spcl/QuaRot](https://github.com/spcl/QuaRot)
-- [https://github.com/locuslab/wanda](https://github.com/locuslab/wanda)
-- [https://github.com/EleutherAI/lm-evaluation-harness](https://github.com/EleutherAI/lm-evaluation-harness)
-- [https://github.com/facebookresearch/SpinQuant](https://github.com/facebookresearch/SpinQuant)
-- [https://github.com/Intelligent-Computing-Lab-Yale/TesseraQ](https://github.com/Intelligent-Computing-Lab-Yale/TesseraQ)
-
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=ModelTC/llmc&type=Timeline)](https://star-history.com/#ModelTC/llmc&Timeline)
-
-## Citation
-
-If you find our LLM-QBench paper/llmc toolkit useful or relevant to your research, please kindly cite our paper:
-
+```yaml
+model:
+    type: Llama
+    path: .cache/huggingface/hub/models--NousResearch--Llama-2-7b-hf/snapshots/dacdfcde31297e34b19ee0e7532f29586d2c17bc
+quant:
+    method: Awq
+    weight:
+        bit: 4
+        symmetric: False
+        granularity: per_group
+        group_size: 64
+save:
+    save_path: ./save_awq_w4a16_llama
+run:
+    task_name: awq_w_only
+    task_type: LLM
 ```
-@misc{llmc,
-   author = {llmc contributors},
-   title = {llmc: Towards Accurate and Efficient LLM Compression},
-   year = {2024},
-   publisher = {GitHub},
-   journal = {GitHub repository},
-   howpublished = {\url{https://github.com/ModelTC/llmc}},
-}
 
-@misc{gong2024llmqbench,
-      title={LLM-QBench: A Benchmark Towards the Best Practice for Post-training Quantization of Large Language Models},
-      author={Ruihao Gong and Yang Yong and Shiqiao Gu and Yushi Huang and Yunchen Zhang and Xianglong Liu and Dacheng Tao},
-      year={2024},
-      eprint={2405.06001},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG}
-}
+上述config文件（可见tpu/config.yml）描述了执行量化最基础的配置文件，此时校准数据集和测试数据集均采用默认开源数据集；
 
-@misc{gong2024llmcbenchmarkinglargelanguage,
-      title={LLMC: Benchmarking Large Language Model Quantization with a Versatile Compression Toolkit},
-      author={Ruihao Gong and Yang Yong and Shiqiao Gu and Yushi Huang and Chentao Lv and Yunchen Zhang and Xianglong Liu and Dacheng Tao},
-      year={2024},
-      eprint={2405.06001},
-      archivePrefix={arXiv},
-      primaryClass={cs.LG},
-      url={https://arxiv.org/abs/2405.06001},
-}
+如果指定业务数据集为校准集和测试集，可使用如下config：
+
+```yaml
+model:
+    type: Llama
+    path: .cache/huggingface/hub/models--NousResearch--Llama-2-7b-hf/snapshots/dacdfcde31297e34b19ee0e7532f29586d2c17bc
+calib:
+    path: # 设置校准数据集路径
+eval:
+    path: # 设置测试数据集路径
+quant:
+    method: Awq
+    weight:
+        bit: 4
+        symmetric: False
+        granularity: per_group
+        group_size: 64
+save:
+    save_path: ./save_awq_w4a16_llama
+run:
+    task_name: awq_w_only
+    task_type: LLM
 ```
+
+# 【阶段四】执行量化算法
+
+``` 
+python3 tpu/llm_quant.py --llmc_tpu_path llmc-tpu path --config_path config path
+```
+* PS：其中llmc_tpu_path需指定当前llmc-tpu的路径；config_path则表示量化config文件对应的路径
+
