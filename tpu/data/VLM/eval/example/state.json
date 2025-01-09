@@ -1,0 +1,22 @@
+{
+  "_data_files": [
+    {
+      "filename": "data-00000-of-00004.arrow"
+    },
+    {
+      "filename": "data-00001-of-00004.arrow"
+    },
+    {
+      "filename": "data-00002-of-00004.arrow"
+    },
+    {
+      "filename": "data-00003-of-00004.arrow"
+    }
+  ],
+  "_fingerprint": "ce71e24d4bd018fb",
+  "_format_columns": null,
+  "_format_kwargs": {},
+  "_format_type": null,
+  "_output_all_columns": false,
+  "_split": "test"
+}

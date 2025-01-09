@@ -1,0 +1,71 @@
+{
+  "builder_name": "parquet",
+  "citation": "",
+  "config_name": "default",
+  "dataset_name": "mme",
+  "dataset_size": 1733119382,
+  "description": "",
+  "download_checksums": {
+    "hf://datasets/lmms-lab/MME@d6c9023f017b564f7b3ccccf5348166bce8fdbcd/data/test-00000-of-00004-a25dbe3b44c4fda6.parquet": {
+      "num_bytes": 34854593,
+      "checksum": null
+    },
+    "hf://datasets/lmms-lab/MME@d6c9023f017b564f7b3ccccf5348166bce8fdbcd/data/test-00001-of-00004-7d22c7f1aba6fca4.parquet": {
+      "num_bytes": 109541429,
+      "checksum": null
+    },
+    "hf://datasets/lmms-lab/MME@d6c9023f017b564f7b3ccccf5348166bce8fdbcd/data/test-00002-of-00004-594798fd3f5b029c.parquet": {
+      "num_bytes": 694888210,
+      "checksum": null
+    },
+    "hf://datasets/lmms-lab/MME@d6c9023f017b564f7b3ccccf5348166bce8fdbcd/data/test-00003-of-00004-53ae1794f93b1e35.parquet": {
+      "num_bytes": 24734047,
+      "checksum": null
+    }
+  },
+  "download_size": 864018279,
+  "features": {
+    "question_id": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "image": {
+      "_type": "Image"
+    },
+    "question": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "answer": {
+      "dtype": "string",
+      "_type": "Value"
+    },
+    "category": {
+      "dtype": "string",
+      "_type": "Value"
+    }
+  },
+  "homepage": "",
+  "license": "",
+  "size_in_bytes": 2597137661,
+  "splits": {
+    "test": {
+      "name": "test",
+      "num_bytes": 1733119382,
+      "num_examples": 2374,
+      "shard_lengths": [
+        1288,
+        200,
+        200,
+        686
+      ],
+      "dataset_name": "mme"
+    }
+  },
+  "version": {
+    "version_str": "0.0.0",
+    "major": 0,
+    "minor": 0,
+    "patch": 0
+  }
+}
