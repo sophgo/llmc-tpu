@@ -1,4 +1,4 @@
-# tpu-mlir_llmc
+# llmc_tpu
 
 本项目支持了多种仅权重量化(weight_only)量化算法，用以支持大语言模型的量化，其最后会用经过量化算法调整后的权重替换原始输入模型权重，替换之后的权重更适合于TPU-MLIR的RTN group量化，相比于直接经过TPU-MLIR的RTN group量化会有更高的精度。
 
