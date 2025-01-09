@@ -9,7 +9,7 @@ quant:
         granularity: per_group
         group_size: 64
 save:
-    save_path: ./save_awq_w4a16_qwen
+    save_path: ./save_awq_w4a16_llama
 run:
     task_name: awq_w_only
     task_type: LLM
