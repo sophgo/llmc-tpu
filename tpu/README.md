@@ -77,7 +77,7 @@ python3 tools/download_calib_dataset.py --dataset_name pileval --save_path llmc-
 |  LLM  | GPTQ      | wikitext2       |     wikitext2   |
 |  VLM  | Awq       | MME             |      MME        |
 
-测试数据集的选取与模型类型、量化算法和校准数据集相关，例如如果量化的是LLM模型，使用的是Awq算法，并且使用pileval做校准数据集，这种情况下推荐用ptb做测试数据集。绝大多数情况下校准数据集和测试数据集应该保持一致。
+测试数据集的选取与模型类型、量化算法和校准数据集相关，例如如果量化的是LLM模型，使用的是Awq算法，并且使用pileval做校准数据集，这种情况下推荐用wikitext2做测试数据集。绝大多数情况下校准数据集和测试数据集应该保持一致。
 
 由于这些开源数据集比较大，本文档提供了专门的下载命令，可以下载对应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_eval_dataset.py python脚本，用于下载测试数据集。
 
