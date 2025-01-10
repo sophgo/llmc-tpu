@@ -60,7 +60,7 @@ python3 tools/download_calib_dataset.py --dataset_name pileval --save_path llmc-
 
 如果是LLM，将业务数据集放置于上述LLM/cali目录下即可。至于数据集具体的格式，用户可以将一条一条数据文本，写到txt文件里面，每一行代表一条文本数据，使用上述的配置，可以实现自定义数据集的校准。
 
-如果是VLM，将业务数据集放置于上述VLM/cali目录下即可。至于数据集具体的格式，可以参考VLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里需要注意一定，最后的json文件应该命名为samples.json。
+如果是VLM，将业务数据集放置于上述VLM/cali目录下即可。至于数据集具体的格式，可以参考VLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里一定需要注意，最后的json文件应该命名为samples.json。
 
 # 【阶段二】选取测试数据集
 
