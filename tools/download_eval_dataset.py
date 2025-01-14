@@ -32,12 +32,18 @@ def download(calib_dataset_name, path):
         save_path = os.path.join(path, 'ptb')
         calib_dataset.save_to_disk(save_path)
         logger.info('download ptb for eval finished.')
-
+    if 'MME' in calib_dataset_name:
+        calib_dataset = load_dataset(
+            'lmms-lab/MME', split='test'
+        )
+        save_path = os.path.join(path, 'MME')
+        calib_dataset.save_to_disk(save_path)
+        logger.info('download MME for eval finished.')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        '--dataset_name', type=str, default=['c4', 'wikitext2', 'ptb'], nargs='*'
+        '--dataset_name', type=str, default=['c4', 'wikitext2', 'ptb', 'MME'], nargs='*'
     )
     parser.add_argument('--save_path', type=str, required=True)
     args = parser.parse_args()

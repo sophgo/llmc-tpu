@@ -44,14 +44,20 @@ def download(calib_dataset_name, path):
         save_path = os.path.join(path, 'ultrachat')
         calib_dataset.save_to_disk(save_path)
         logger.info('download ultrachat for calib finished.')
-
+    if 'MME' in calib_dataset_name:
+        calib_dataset = load_dataset(
+            'lmms-lab/MME', split='test'
+        )
+        save_path = os.path.join(path, 'MME')
+        calib_dataset.save_to_disk(save_path)
+        logger.info('download MME for calib finished.')
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '--dataset_name',
         type=str,
-        default=['pileval', 'c4', 'wikitext2', 'ptb', 'ultrachat'],
+        default=['pileval', 'c4', 'wikitext2', 'ptb', 'ultrachat','MME'],
         nargs='*',
     )
     parser.add_argument('--save_path', type=str, required=True)
