@@ -4,7 +4,7 @@
 
 下面是具体的操作流程。
 
-# 目录说明
+# llmc-tpu/tpu目录说明
 ```
 .
 ├── README.md
@@ -46,7 +46,7 @@
 |  LLM  | GPTQ      | wikitext2       |
 |  VLM  | Awq       | MME             |
 
-校准数据集的选取与模型类型和量化算法相关，例如如果量化的是LLM模型，使用的是Awq算法，通常推荐使用pileval数据集。由于这些开源数据集比较大，本文档提供了专门的下载命令，可以下载对应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_calib_dataset.py和download_eval_dataset.py两个python脚本，分别用于下载校准集和测试集。
+校准数据集的选取与模型类型和量化算法相关，例如如果量化的是LLM模型，使用的是Awq算法，通常推荐使用pileval数据集作为校准集。针对这些开源数据集本文档提供了对应的下载命令，可以运行下载相应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_calib_dataset.py和download_eval_dataset.py两个python脚本，分别用于下载校准集和测试集。
 
 下面以pileval为例，给出对应的python demo:
 ```
@@ -79,7 +79,7 @@ python3 tools/download_calib_dataset.py --dataset_name pileval --save_path llmc-
 
 测试数据集的选取与模型类型、量化算法和校准数据集相关，例如如果量化的是LLM模型，使用的是Awq算法，并且使用pileval做校准数据集，这种情况下推荐用wikitext2做测试数据集。绝大多数情况下校准数据集和测试数据集应该保持一致。
 
-由于这些开源数据集比较大，本文档提供了专门的下载命令，可以下载对应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_eval_dataset.py python脚本，用于下载测试数据集。
+针对这些开源数据集本文档提供了对应的下载命令，可以运行命令下载相应的数据集。具体操作如下：可打开llmc-tpu/tools文件，里面对应有download_eval_dataset.py python脚本，用于下载测试数据集。
 
 下面以ptb为例，给出对应的python demo:
 ```
@@ -127,6 +127,7 @@ eval:
     seq_len: 2048
 quant:
     method: Awq
+    quant_objects: [vision,language] # default is [language]
     weight:
         bit: 4
         symmetric: False
@@ -199,7 +200,7 @@ run:
 
 * eval。eval类参数主要指定了和测试集相关的参数，如果用户使用开源数据集测试，仅需根据上文步骤下载指定的开源数据集到指定位置，其余参数可不关心。如果使用业务数据集做测试，则需要给出业务数据集路径,填写到上面config文件中eval类下的path。eval类参数中的eval_pos会分别指定不同的模型做精度测试，其中pretrain是预训练模型，transformed模型是权重经过调整的浮点模型，fake_quant是量化模型。
 
-* quant。quant类参数主要关注method和weight类参数。method指定了所需的量化方法，上面config选择了Awq算法，该算法也是当前使用最为普遍的量化算法。weight类参数指定了weight量化的相关配置，由于TPU-MLIR仅支持weight only量化，因此这里只需要关注weight量化配置即可。在这些量化参数中，为了对齐TPU-MLIR量化配置，需要限制某些参数选取，具体如下所示：
+* quant。quant类参数主要关注method,quant_objects和weight类参数。method指定了所需的量化方法，上面config选择了Awq算法，该算法也是当前使用最为普遍的量化算法。quant_objects参数主要针对VLM量化，其默认是仅仅针对language部分量化，但也可尝试将vision部分量化，LLM模型量化可不关心该参数。weight类参数指定了weight量化的相关配置，由于TPU-MLIR仅支持weight only量化，因此这里只需要关注weight量化配置即可。在这些量化参数中，为了对齐TPU-MLIR量化配置，需要限制某些参数选取，具体如下所示：
 
 | bit   | symmetric | granularity                    |   group_size                   | 
 |:-----:|:---------:|:------------------------------:|:------------------------------:|
