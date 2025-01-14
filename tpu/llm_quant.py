@@ -47,7 +47,7 @@ def validate_quant_config(quant_config):
             "If 'bit' is 4, 'granularity' must be 'per_group' or 'per_channel'."
         )
     elif bit == 8:
-        assert symmetric is True, "If 'bit' is 8, 'symmetric' must be False."
+        assert symmetric is True, "If 'bit' is 8, 'symmetric' must be True."
         assert granularity == 'per_channel', (
             "If 'bit' is 8, 'granularity' must be 'per_channel'."
         )
