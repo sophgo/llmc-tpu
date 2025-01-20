@@ -1,0 +1,41 @@
+base:
+    seed: &seed 42
+model:
+    type: Qwen2VL # 设置模型名, 具体支持的模型参见llmc/models目录
+    path: /workspace/Qwen2-VL-2B-Instruct    # 设置模型权重路径，请改成您需要的模型
+    torch_dtype: auto
+calib:
+    name: mme   # 设置成实际的校准数据集名称，mme，pileval等等
+    download: False
+    path: /workspace/llmc-tpu/tpu/data/VLM/cali/MME  # 设置校准数据集路径
+    n_samples: 128
+    bs: 1
+    seq_len: 512
+    preproc: pileval_awq
+    seed: *seed
+eval:
+    eval_pos: [pretrain, fake_quant]
+    name: mme  # 设置成实际的测试数据集名称，mme,wikitext2等等
+    download: False
+    path: /workspace/llmc-tpu/tpu/data/VLM/eval/MME # 设置测试数据集路径
+    bs: 1
+    seq_len: 2048
+quant:
+    method: Awq
+    quant_objects: [language] # 默认只量化LLM部分，如要量化VIT部分，则设置成[vision, language]
+    weight:
+        bit: 4 # 设置成想要的量化bit，可以支持4或8
+        symmetric: False # 4bit填False；8bit填True
+        granularity: per_group # 4bit填per_group；8bit，填per_channel
+        group_size: 64 # 4bit填64(与TPU-MLIR对应)；8bit, 填-1
+    special:
+        trans: True
+        trans_version: v2
+        weight_clip: True
+        clip_sym: True
+save:
+    save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
+    save_path: ./save_path # 设置保存权重的路径
+run:
+    task_name: awq_w_only
+    task_type: VLM   # 设置成VLM或者LLM
