@@ -204,8 +204,8 @@ run:
 
 | bit   | symmetric | granularity                    |   group_size                   | 
 |:-----:|:---------:|:------------------------------:|:------------------------------:|
-|  4    | False     | per_channel                    |      -1                        |
-|  8    | True      | per_channel or per_group       |-1 or 任意（需对齐TPU-MLIR粒度）   |
+|  4    | False     | per_channel or per_group       |  -1 or 任意（需对齐TPU-MLIR粒度） |
+|  8    | True      | per_channel                    |        -1                      |
 
 * save。save_trans该参数表示是否需要保存量化调整之后的浮点权重，经过量化调整之后的权重相比于原始浮点权重更适合于RTN量化。save_path表示保存带有量化调整浮点权重的模型的路径。用户可以将新生成的浮点模型经过TPU-MLIR编译器weight_only RTN量化生成量化模型，最终部署在TPU硬件上。在同等量化配置下经过TPU-MLIR量化，llmc-tpu量化调整的浮点模型相比原始浮点模型，最终产生的量化模型精度更高。
 
