@@ -2,6 +2,20 @@
 
 本项目支持了多种仅权重量化(weight_only)量化算法，用以支持大语言模型的量化，其最后会用经过量化算法调整后的权重替换原始输入模型权重，替换之后的权重更适合于TPU-MLIR的RTN group量化，相比于直接经过TPU-MLIR的RTN group量化会有更高的精度。
 
+你可以通过以下命令下载可以运行llmc_tpu的docker镜像，中国大陆用户推荐使用阿里云docker。
+
+docker hub
+
+```
+docker pull llmcompression/llmc:pure-latest
+```
+
+阿里云docker
+
+```
+docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/llmcompression:pure-latest
+```
+
 下面是具体的操作流程。
 
 # llmc-tpu/tpu目录说明
