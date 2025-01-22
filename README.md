@@ -174,7 +174,7 @@ quant:
         clip_sym: True
 save:
     save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
-    save_path: ./save_path # 设置保存权重的路径
+    save_path: /workspace/save_path # 设置保存权重的路径
 run:
     task_name: awq_w_only
     task_type: VLM   # 设置成VLM或者LLM
@@ -202,7 +202,7 @@ run:
 
 ``` shell
 cd /workspace/llmc-tpu
-python3 tpu/llm_quant.py --llmc_tpu_path . --config_path ./tpu/example.yml
+python3 tpu/llm_quant.py --config_path ./tpu/example.yml
 ```
 * config_path则表示量化config文件对应的路径
 

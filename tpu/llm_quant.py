@@ -4,6 +4,10 @@ import os
 import subprocess
 from collections import OrderedDict
 
+CURRENT_FILE = os.path.abspath(__file__)
+CURRENT_DIR = os.path.dirname(CURRENT_FILE)
+PROJECT_DIR = os.path.dirname(CURRENT_DIR)
+
 def merge_dicts(source, target):
     for key, value in source.items():
         if key in target:
@@ -68,36 +72,39 @@ def add_cali_eval_config(quant_config, args):
         custom_data['calib'] = {}
         if task_type == "LLM":
             if quant_method == "Awq":
-                custom_data['calib']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/cali/pileval"
+                custom_data['calib']['path'] = f"{PROJECT_DIR}/tpu/data/{task_type}/cali/pileval"
             elif quant_method == "GPTQ":
-                custom_data['calib']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/cali/wikitext2"
+                custom_data['calib']['path'] = f"{PROJECT_DIR}/tpu/data/{task_type}/cali/wikitext2"
         elif task_type == "VLM":
             if quant_method == "Awq":
-                custom_data['calib']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/cali/general_custom_data"
+                custom_data['calib']['path'] = f"{PROJECT_DIR}/tpu/data/{task_type}/cali/general_custom_data"
     if "eval" not in custom_data:
         custom_data['eval'] = {}
         if task_type == "LLM":
             if quant_method =="Awq":
-                custom_data['eval']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/eval/wikitext2"
+                custom_data['eval']['path'] = f"{PROJECT_DIR}/tpu/data/{task_type}/eval/wikitext2"
             elif quant_method == "GPTQ":
-                custom_data['eval']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/eval/wikitext2"
+                custom_data['eval']['path'] = f"{PROJECT_DIR}/tpu/data/{task_type}/eval/wikitext2"
         elif task_type == "VLM":
             if quant_method == "Awq":
-                custom_data['eval']['path'] = f"{args.llmc_tpu_path}/tpu/data/{task_type}/eval/MME"
+                custom_data['eval']['path'] = f"{PROJECT_DIR}/tpu/data/{task_type}/eval/MME"
     return custom_data
     
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--llmc_tpu_path', help='llmc-tpu path')
-    parser.add_argument('--config_path',help='config_path')
+    parser.add_argument('--config_path', required=True, help='config_path')
     args = parser.parse_args()
     
     OrderedLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, construct_mapping)
-    OrderedDumper.add_representer(OrderedDict, represent_ordered_dict)        
-    os.chdir(args.llmc_tpu_path)
+    OrderedDumper.add_representer(OrderedDict, represent_ordered_dict)
     
     with open(args.config_path, "r") as file:
         custom_data = yaml.load(file, Loader=OrderedLoader)
+    #确定save文件夹是否存在，如果存在则报错
+    save_path = custom_data["save"].get("save_path")
+    if os.path.exists(save_path):
+        raise RuntimeError(f"{save_path} is exist !!!")
+    
     #验证自定义config文件量化配置的正确性
     validate_quant_config(custom_data['quant']['weight'])
     
@@ -118,4 +125,4 @@ if __name__ == '__main__':
     #生成新的config文件并运行量化
     with open("tpu/w_only.yml", "w") as file:
         yaml.dump(data, file, Dumper=OrderedDumper, sort_keys=False)    
-    subprocess.run(["bash", "tpu/run_llmc.sh", args.llmc_tpu_path, task_name])
+    subprocess.run(["bash", "tpu/run_llmc.sh", PROJECT_DIR, task_name])

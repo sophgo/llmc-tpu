@@ -8,7 +8,7 @@ calib:
     name: mme   # 设置成实际的校准数据集名称，mme，pileval等等
     download: False
     path: /workspace/llmc-tpu/tpu/data/VLM/cali/MME  # 设置校准数据集路径
-    n_samples: 128
+    n_samples: 128 # 可以调整，如果GPU内存不足，可以调小
     bs: 1
     seq_len: 512
     preproc: pileval_awq
@@ -35,7 +35,7 @@ quant:
         clip_sym: True
 save:
     save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
-    save_path: ./save_path # 设置保存权重的路径
+    save_path: /workspace/save_path # 设置保存权重的路径
 run:
     task_name: awq_w_only
     task_type: VLM   # 设置成VLM或者LLM
