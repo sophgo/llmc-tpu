@@ -30,14 +30,24 @@ docker pull registry.cn-hangzhou.aliyuncs.com/yongyang/llmcompression:pure-lates
 # create container. llmc_test is just a name, and you can set your own name
 docker run --privileged --name llmc_test -it --shm-size 64G --gpus all -v $PWD:/workspace  registry.cn-hangzhou.aliyuncs.com/yongyang/llmcompression:pure-latest
 ```
+从这一步之后的所有环境都是在docker容器中。
 
 4) 进入`llmc-tpu`，安装依赖包
-注意现在已经在docker容器中
 
 ``` shell
 cd /workspace/llmc-tpu
 pip3 install -r requirements.txt
 ```
+
+5) huggingface token准备 (可选)
+
+这一步是可选的，但是不执行可能会出现`huggingface_hub.errors.LocalTokenNotFoundError`错误。
+
+``` shell
+huggingface-cli login
+#然后输入huggingface的token，参见https://huggingface.co/settings/tokens
+```
+
 
 ## tpu目录说明
 
@@ -137,7 +147,7 @@ calib:
     name: mme   # 设置成实际的校准数据集名称，mme，pileval等等
     download: False
     path: /workspace/llmc-tpu/tpu/data/VLM/cali/MME  # 设置校准数据集路径
-    n_samples: 128
+    n_samples: 128 # 可以调整，如果GPU内存不足，可以调小
     bs: 1
     seq_len: 512
     preproc: pileval_awq
