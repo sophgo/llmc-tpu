@@ -102,6 +102,8 @@ cd /workspace/llmc-tpu
 python3 tools/download_calib_dataset.py --dataset_name MME --save_path tpu/data/VLM/cali
 # 测试数据集
 python3 tools/download_eval_dataset.py --dataset_name MME --save_path tpu/data/VLM/eval
+# 对校准数据集转成校准需要的格式
+python3 tpu/mme_extract.py --mme_path tpu/data/VLM/cali/MME --num_samples 128
 ```
 
 如果是LLM模型，建议用Awq算法，下载数据集命令如下：
@@ -147,7 +149,7 @@ calib:
     name: mme   # 设置成实际的校准数据集名称，mme，pileval等等
     download: False
     path: /workspace/llmc-tpu/tpu/data/VLM/cali/MME  # 设置校准数据集路径
-    n_samples: 128 # 可以调整，如果GPU内存不足，可以调小
+    n_samples: 128 # 可以根据需要调整
     bs: 1
     seq_len: 512
     preproc: pileval_awq
