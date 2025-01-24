@@ -146,7 +146,7 @@ model:
     path: /workspace/Qwen2-VL-2B-Instruct    # 设置模型权重路径，请改成您需要的模型
     torch_dtype: auto
 calib:
-    name: mme   # 设置成实际的校准数据集名称，mme，pileval等等
+    name: custom_mm   # 设置成实际的校准数据集名称，mme，pileval等等
     download: False
     path: /workspace/llmc-tpu/tpu/data/VLM/cali/MME  # 设置校准数据集路径
     n_samples: 128 # 可以根据需要调整
@@ -172,7 +172,7 @@ quant:
     special:
         trans: True
         trans_version: v2
-        weight_clip: True
+        weight_clip: False
         clip_sym: True
 save:
     save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
