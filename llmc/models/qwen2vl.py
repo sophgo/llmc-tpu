@@ -58,7 +58,7 @@ class Qwen2VL(Qwen2):
         self.model_config = self.vlm_model_config
 
         self.min_pixels = 256 * 28 * 28
-        self.max_pixels = 1280 * 28 * 28
+        self.max_pixels = 256 * 28 * 28
         logger.warning(f'min_pixels is set to: {self.min_pixels}')
         logger.warning(f'max_pixels is set to: {self.max_pixels}')
         logger.warning('You can refer to the link https://huggingface.co/Qwen/Qwen2-VL-2B-Instruct '
@@ -224,8 +224,8 @@ try:
             batch_size: Optional[Union[int, str]] = 1,
             use_cache=True,
             use_flash_attention_2: Optional[bool] = False,
-            max_pixels: int = 12845056,
-            min_pixels: int = 3136,
+            max_pixels: int = 200704,
+            min_pixels: int = 200704,
             max_num_frames: int = 32,
             **kwargs,
         ) -> None:
