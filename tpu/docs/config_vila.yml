@@ -1,0 +1,44 @@
+base:
+    seed: &seed 42
+model:
+    type: Vila
+    path: /workspace/vila1.5-3b
+calib:
+    name: custom_mm
+    download: False
+    path: /workspace/llmc-tpu/tpu/data/VLM/cali/MME
+    n_samples: 128
+    bs: 1
+    seq_len: 512
+    preproc: pileval_awq
+    seed: *seed
+eval:
+    eval_pos: [pretrain, fake_quant]
+    name: mme
+    download: False
+    path: /workspace/llmc-tpu/tpu/data/VLM/eval/MME
+    bs: 1
+    seq_len: 2048
+quant:
+    method: Awq
+    quant_objects: [language] # default is [language]
+    skip_layers: False
+    weight:
+        bit: 4
+        symmetric: False
+        granularity: per_group
+        group_size: 64
+    special:
+        trans: True
+        # The options for "trans_version" include "v1" and "v2".
+        # But their results don't differ significantly.
+        trans_version: v2
+        weight_clip: False
+        # For 2-bit quantization, setting "clip_sym: False" will yield better results.
+        clip_sym: True
+save:
+    save_trans: True
+    save_path: /workspace/llmc-tpu/save_awq_w4a16_vila
+run:
+    task_name: awq_w_only
+    task_type: VLM

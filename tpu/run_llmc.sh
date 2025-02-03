@@ -7,6 +7,7 @@ echo "llmc: $llmc"
 export PYTHONPATH=$llmc:$PYTHONPATH
 
 task_name="$2"
+task_path="$3"
 config=${llmc}/tpu/w_only.yml
 
 nnodes=1
@@ -36,10 +37,10 @@ torchrun \
 --rdzv_backend c10d \
 --rdzv_endpoint $MASTER_ADDR:$MASTER_PORT \
 ${llmc}/llmc/__main__.py --config $config --task_id $task_id \
-2>&1 | tee tpu/${task_name}.log 2>&1 #&
+2>&1 | tee ${task_path}/${task_name}.log 2>&1 #&
 
 sleep 2
-ps aux | grep '__main__.py' | grep $task_id | awk '{print $2}' > tpu/${task_name}.pid
+ps aux | grep '__main__.py' | grep $task_id | awk '{print $2}' > ${task_path}/${task_name}.pid
 
 # You can kill this program by 
 # xargs kill -9 < xxx.pid

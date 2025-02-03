@@ -10,13 +10,14 @@ def update_vllm_quant_config(
 ):
 
     need_pack = config.quant.weight.get('need_pack', False)
+    skip_layers = []
+    if config.quant.get('skip_layers', False) == True:
+        skip_layers = model.skip_layer_name()
     if config.quant.get('quant_type', 'int-quant') == 'float-quant':
         if 'act' in config.quant and config.quant.act.static:
             quant_config = {
                 'activation_scheme': 'static',
-                'ignored_layers': [
-                    model.skip_layer_name()
-                ],
+                'ignored_layers': skip_layers,
                 'quant_method': 'fp8'
             }
             config_file = save_quant_path + '/config.json'
@@ -86,7 +87,7 @@ def update_vllm_quant_config(
             }
         },
         'format': vllm_quant_format,
-        'ignore': model.skip_layer_name(),
+        'ignore': skip_layers,
         'quant_method': vllm_quant_method,
     }
 

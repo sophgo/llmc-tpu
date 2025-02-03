@@ -164,6 +164,7 @@ eval:
 quant:
     method: Awq
     quant_objects: [language] # 默认只量化LLM部分，如要量化VIT部分，则设置成[vision, language]
+    skip_layers: False # LLM中skip_layer_name是否生效，如果生效则对应的layer不量化，一般对应lm_head
     weight:
         bit: 4 # 设置成想要的量化bit，可以支持4或8
         symmetric: False # 4bit填False；8bit填True
@@ -178,7 +179,7 @@ save:
     save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
     save_path: /workspace/save_path # 设置保存权重的路径
 run:
-    task_name: awq_w_only
+    task_name: awq_w_only # 配置任务名称
     task_type: VLM   # 设置成VLM或者LLM
 ```
 
@@ -187,10 +188,10 @@ run:
 
 | **参数**           | **描述**                                                  |
 |:------------------|:--------------------------------------------------------|
-| model              | 模型名称，支持的模型在llmc/models目录，可以自行支持新模型`llmc/models/xxxx.py` |
+| model              | 模型名称，支持的模型在`llmc/models/_init_.py`，可以自行支持新模型`llmc/models/xxxx.py` |
 | calib              | calib类参数主要指定校准集相关的参数                       |
 | eval               | eval类参数主要指定了和测试集相关的参数                     |
-| quant              | 指定量化参数，一般建议用Awq算法，quant_objects一般选language，关于weight量化参数参考下表 |
+| quant              | 指定量化参数，一般建议用Awq算法，`quant_objects`一般选language，关于weight量化参数参考下表 |
 
 为了与`TPU-MLIR`对齐，weight量化相关参数配置如下：
 
@@ -199,6 +200,7 @@ run:
 |  4    | False     | per_channel or per_group       |  -1 or 任意(与TPU-MLIR对齐) |
 |  8    | True      | per_channel                    |        -1                  |
 
+另外要注意`skip_layers`默认是False，会对`lm_head`进行量化；如果不想要量化`lm_head`，请设置成True
 
 ### 【阶段三】执行量化算法
 
@@ -207,4 +209,11 @@ cd /workspace/llmc-tpu
 python3 tpu/llm_quant.py --config_path ./tpu/example.yml
 ```
 * config_path则表示量化config文件对应的路径
+* 运行结束后会在`save_path`路径保存权重和日志
+
+## QA
+
+1. 如何支持新模型？
+
+参考[添加新模型](tpu/docs/add_model.md)
 

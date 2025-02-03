@@ -104,6 +104,7 @@ if __name__ == '__main__':
     save_path = custom_data["save"].get("save_path")
     if os.path.exists(save_path):
         raise RuntimeError(f"{save_path} is exist !!!")
+    os.makedirs(save_path)
     
     #验证自定义config文件量化配置的正确性
     validate_quant_config(custom_data['quant']['weight'])
@@ -125,4 +126,4 @@ if __name__ == '__main__':
     #生成新的config文件并运行量化
     with open("tpu/w_only.yml", "w") as file:
         yaml.dump(data, file, Dumper=OrderedDumper, sort_keys=False)    
-    subprocess.run(["bash", "tpu/run_llmc.sh", PROJECT_DIR, task_name])
+    subprocess.run(["bash", "tpu/run_llmc.sh", PROJECT_DIR, task_name, save_path])

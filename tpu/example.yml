@@ -23,6 +23,7 @@ eval:
 quant:
     method: Awq
     quant_objects: [language] # 默认只量化LLM部分，如要量化VIT部分，则设置成[vision, language]
+    skip_layers: False # LLM中skip_layer_name是否生效，如果生效则对应的layer不量化，一般对应lm_head
     weight:
         bit: 4 # 设置成想要的量化bit，可以支持4或8
         symmetric: False # 4bit填False；8bit填True
@@ -37,5 +38,5 @@ save:
     save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
     save_path: /workspace/save_path # 设置保存权重的路径
 run:
-    task_name: awq_w_only
+    task_name: awq_w_only # 配置任务名称
     task_type: VLM   # 设置成VLM或者LLM
