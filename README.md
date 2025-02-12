@@ -164,7 +164,7 @@ eval:
 quant:
     method: Awq
     quant_objects: [language] # 默认只量化LLM部分，如要量化VIT部分，则设置成[vision, language]
-    skip_layers: False # LLM中skip_layer_name是否生效，如果生效则对应的layer不量化，一般对应lm_head
+    skip_layers: True # LLM中skip_layer_name是否生效，如果生效则对应的layer不量化，一般对应lm_head
     weight:
         bit: 4 # 设置成想要的量化bit，可以支持4或8
         symmetric: False # 4bit填False；8bit填True
@@ -200,7 +200,6 @@ run:
 |  4    | False     | per_channel or per_group       |  -1 or 任意(与TPU-MLIR对齐) |
 |  8    | True      | per_channel                    |        -1                  |
 
-另外要注意`skip_layers`默认是False，会对`lm_head`进行量化；如果不想要量化`lm_head`，请设置成True
 
 ### 【阶段三】执行量化算法
 

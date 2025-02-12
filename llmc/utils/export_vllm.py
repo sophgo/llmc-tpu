@@ -11,7 +11,7 @@ def update_vllm_quant_config(
 
     need_pack = config.quant.weight.get('need_pack', False)
     skip_layers = []
-    if config.quant.get('skip_layers', False) == True:
+    if config.quant.get('skip_layers', True) == True:
         skip_layers = model.skip_layer_name()
     if config.quant.get('quant_type', 'int-quant') == 'float-quant':
         if 'act' in config.quant and config.quant.act.static:

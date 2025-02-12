@@ -22,7 +22,7 @@ eval:
 quant:
     method: Awq
     quant_objects: [language] # default is [language]
-    skip_layers: False
+    skip_layers: True
     weight:
         bit: 4
         symmetric: False
