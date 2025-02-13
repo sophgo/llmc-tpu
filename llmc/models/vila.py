@@ -63,7 +63,8 @@ class Vila(BaseModel):
         self.vision_model = self.mm_model.get_vision_tower()  # vit model
         self.mm_projector = self.mm_model.get_mm_projector()
         self.model = self.mm_model.get_llm()  # llm model
-        self.model_config = types.SimpleNamespace(**self.mm_model_config.llm_cfg)
+        self.model_config = types.SimpleNamespace(
+            **self.mm_model_config.llm_cfg)
         self.conv_template = conv_templates['vicuna_v1']
 
     def batch_process(self,
@@ -145,7 +146,7 @@ class Vila(BaseModel):
 
     def get_extra_rot_module_besides_embed_layers(self):
         return [self.mm_projector.layers[-1]]
-    
+
     def get_layers_except_blocks(self):
         return [
             self.embed_tokens, self.rotary_emb, self.model.model.norm,
