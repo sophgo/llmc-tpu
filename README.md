@@ -4,6 +4,8 @@
 
 本项目是基于`ModelTC/llmc`进行一些定制化修改，用于支持Sophgo处理器。
 
+现有已经支持的大模型在[支持列表](./llmc/models/__init__.py)
+
 ## 环境准备
 
 1) 下载本项目
@@ -216,3 +218,9 @@ python3 tpu/llm_quant.py --config_path ./tpu/example.yml
 
 参考[添加新模型](tpu/docs/add_model.md)
 
+2. 如果模型源码不在transformers里面，怎么运行?
+
+如果模型源码不在transformers中，则按照模型源码的安装方法安装。比如Vila源码下载后进入Vila目录，执行如下命令：
+``` shell
+python -m pip install -e .
+```
