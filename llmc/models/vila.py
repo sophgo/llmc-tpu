@@ -1,37 +1,29 @@
+import types
+from datetime import timedelta
 from typing import List, Optional, Tuple, Union
 
 import torch
 from accelerate import Accelerator, DistributedType, InitProcessGroupKwargs
 from accelerate.state import AcceleratorState
+from lmms_eval.api.instance import Instance
+from lmms_eval.api.model import lmms
 from loguru import logger
-from PIL import Image
-from transformers import (AutoConfig, AutoProcessor,
-                          LlavaForConditionalGeneration)
+from tqdm import tqdm
 
 from llmc.utils.registry_factory import MODEL_REGISTRY
-from datetime import timedelta
-from lmms_eval.api.model import lmms
-from lmms_eval.api.instance import Instance
+
 from .base_model import BaseModel
-from tqdm import tqdm
-import types
 
 try:
     from llava.constants import IMAGE_TOKEN_INDEX
-
     from llava.conversation import SeparatorStyle, conv_templates
-    from llava.data.dataset import LazySupervisedDataset
-    from llava.mm_utils import (
-        KeywordsStoppingCriteria,
-        get_model_name_from_path,
-        process_images,
-        tokenizer_image_token,
-    )
+    from llava.mm_utils import (KeywordsStoppingCriteria,
+                                get_model_name_from_path, process_images,
+                                tokenizer_image_token)
     from llava.model.builder import load_pretrained_model
-    from llava.utils import disable_torch_init
 except ImportError as e:
-    raise RuntimeError(
-        f"VILA is not installed. Please install VILA to use this model. Error: {e}"
+    logger.warning(
+        f'VILA is not installed. Please install VILA to use this model. Error: {e}'
     )
 
 
@@ -47,8 +39,8 @@ class Vila(BaseModel):
 
     def build_model(self):
         model_name = get_model_name_from_path(self.model_path)
-        self.tokenizer, self.mm_model, self.image_processor, self.max_length = load_pretrained_model(
-            self.model_path, model_name, attn_implementation="eager")
+        self.tokenizer, self.mm_model, self.image_processor, self.max_length = \
+            load_pretrained_model(self.model_path, model_name, attn_implementation='eager')
         self.mm_model_config = self.mm_model.config
         if not self.use_cache:
             self.mm_model_config.llm_cfg['use_cache'] = False
@@ -95,10 +87,11 @@ class Vila(BaseModel):
             text,
             self.tokenizer,
             image_token_index=IMAGE_TOKEN_INDEX,
-            return_tensors="pt",
+            return_tensors='pt',
         )
         input_ids = torch.as_tensor(input_ids).cuda().unsqueeze(0)
-        pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eos_token_id
+        pad_token_ids = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id \
+            is not None else self.tokenizer.eos_token_id
         attention_masks = input_ids.ne(pad_token_ids).long().cuda()
 
         img_path = img_qas[0]['image']
@@ -110,10 +103,10 @@ class Vila(BaseModel):
         stopping_criteria = KeywordsStoppingCriteria(keywords, self.tokenizer,
                                                      input_ids)
         inputs = {
-            "input_ids": input_ids,
-            "images": images,
-            "attention_mask": attention_masks,
-            "stopping_criteria": [stopping_criteria]
+            'input_ids': input_ids,
+            'images': images,
+            'attention_mask': attention_masks,
+            'stopping_criteria': [stopping_criteria]
         }
         return inputs
 
@@ -219,18 +212,19 @@ class VilaEval(lmms):
     def __init__(
         self,
         llmc_model,
-        pretrained: str = "Efficient-Large-Model/VILA1.5-40b",
+        pretrained: str = 'Efficient-Large-Model/VILA1.5-40b',
         max_frames_num: Optional[int] = 100,
         truncation: Optional[bool] = True,
-        device: Optional[str] = "cuda:0",
+        device: Optional[str] = 'cuda:0',
         batch_size: Optional[Union[int, str]] = 1,
-        device_map="cuda:0",
+        device_map='cuda:0',
         use_cache=True,
-        truncate_context=False,  # whether to truncate the context in generation, set it False for LLaVA-1.6
+        # whether to truncate the context in generation, set it False for LLaVA-1.6
+        truncate_context=False,
         **kwargs,
     ) -> None:
         super().__init__()
-        assert kwargs == {}, f"Unexpected kwargs: {kwargs}"
+        assert kwargs == {}, f'Unexpected kwargs: {kwargs}'
         assert batch_size == 1, f'Batch size should be 1 for Vila, but got {batch_size}.'
 
         accelerator_kwargs = InitProcessGroupKwargs(timeout=timedelta(
@@ -238,15 +232,15 @@ class VilaEval(lmms):
         accelerator = Accelerator(kwargs_handlers=[accelerator_kwargs])
         if accelerator.num_processes > 1:
             self._device = torch.device(
-                f"cuda:{accelerator.local_process_index}")
-            self.device_map = f"cuda:{accelerator.local_process_index}"
-        elif accelerator.num_processes == 1 and device_map == "auto":
+                f'cuda:{accelerator.local_process_index}')
+            self.device_map = f'cuda:{accelerator.local_process_index}'
+        elif accelerator.num_processes == 1 and device_map == 'auto':
             self._device = torch.device(device)
             self.device_map = device_map
         else:
             self._device = torch.device(
-                f"cuda:{accelerator.local_process_index}")
-            self.device_map = f"cuda:{accelerator.local_process_index}"
+                f'cuda:{accelerator.local_process_index}')
+            self.device_map = f'cuda:{accelerator.local_process_index}'
 
         self.pretrained = pretrained
         self.model_name = get_model_name_from_path(pretrained)
@@ -264,28 +258,34 @@ class VilaEval(lmms):
         self.conv_template = conv_templates['vicuna_v1']
         self.use_cache = use_cache
         self.truncate_context = truncate_context
-        # assert self.batch_size_per_gpu == 1, "Llava currently does not support batched generation. See https://github.com/haotian-liu/LLaVA/issues/754. HF Llava also has this issue."
+        # assert self.batch_size_per_gpu == 1, "Llava currently does not support batched generation.
+        # See https://github.com/haotian-liu/LLaVA/issues/754. HF Llava also has this issue."
         if accelerator.num_processes > 1:
             assert accelerator.distributed_type in [
                 DistributedType.FSDP, DistributedType.MULTI_GPU,
                 DistributedType.DEEPSPEED
-            ], "Unsupported distributed type provided. Only DDP and FSDP are supported."
-            # If you want to use DistributedType.DEEPSPEED, you have to run accelerate config before using the model
-            # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the prepare model works
-            # I tried to set different parameters in the kwargs to let default zero 2 stage works, but it didn't work.
+            ], 'Unsupported distributed type provided. Only DDP and FSDP are supported.'
+            # If you want to use DistributedType.DEEPSPEED, you have to run accelerate config
+            # before using the model
+            # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the
+            # prepare model works
+            # I tried to set different parameters in the kwargs to let default zero 2 stage works,
+            # but it didn't work.
             if accelerator.distributed_type == DistributedType.DEEPSPEED:
                 kwargs = {
-                    "train_micro_batch_size_per_gpu":
+                    'train_micro_batch_size_per_gpu':
                     self.batch_size_per_gpu,
-                    "train_batch_size":
+                    'train_batch_size':
                     self.batch_size_per_gpu * accelerator.num_processes,
                 }
                 AcceleratorState().deepspeed_plugin.deepspeed_config_process(
                     must_match=True, **kwargs)
                 logger.info(
-                    "Detected that you are using DistributedType.DEEPSPEED. Make sure you run `accelerate config` and set zero stage to 0"
+                    'Detected that you are using DistributedType.DEEPSPEED. Make sure you run '
+                    '`accelerate config` and set zero stage to 0'
                 )
-            if accelerator.distributed_type == DistributedType.FSDP or accelerator.distributed_type == DistributedType.DEEPSPEED:
+            if accelerator.distributed_type == DistributedType.FSDP or \
+                    accelerator.distributed_type == DistributedType.DEEPSPEED:
                 self._model = accelerator.prepare(self._model)
             else:
                 self._model = accelerator.prepare_model(self._model,
@@ -293,18 +293,18 @@ class VilaEval(lmms):
             self.accelerator = accelerator
             if self.accelerator.is_local_main_process:
                 logger.info(
-                    f"Using {accelerator.num_processes} devices with data parallelism"
+                    f'Using {accelerator.num_processes} devices with data parallelism'
                 )
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
-        elif accelerator.num_processes == 1 and device_map == "auto":
+        elif accelerator.num_processes == 1 and device_map == 'auto':
             logger.info(
-                f"Using {accelerator.num_processes} devices with tensor parallelism"
+                f'Using {accelerator.num_processes} devices with tensor parallelism'
             )
             self._rank = 0
             self._word_size = 1
         else:
-            logger.info(f"Using single device: {self._device}")
+            logger.info(f'Using single device: {self._device}')
             self._model.to(self._device)
             self._rank = 0
             self._world_size = 1
@@ -320,14 +320,15 @@ class VilaEval(lmms):
     @property
     def model(self):
         # returns the model, unwrapping it if using Accelerate
-        if hasattr(self, "accelerator"):
+        if hasattr(self, 'accelerator'):
             return self.accelerator.unwrap_model(self._model)
         else:
             return self._model
 
     @property
     def eot_token_id(self):
-        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
+        # we use EOT because end of *text* is more accurate for what we're doing
+        # than end of *sentence*
         return self._tokenizer.eos_token_id
 
     @property
@@ -352,7 +353,7 @@ class VilaEval(lmms):
 
     def loglikelihood(self,
                       requests: List[Instance]) -> List[Tuple[float, bool]]:
-        raise NotImplementedError("Loglikelihood is not implemented for Vila")
+        raise NotImplementedError('Loglikelihood is not implemented for Vila')
 
     def flatten(self, input):
         new_list = []
@@ -365,7 +366,7 @@ class VilaEval(lmms):
         res = []
         pbar = tqdm(total=len(requests),
                     disable=(self.rank != 0),
-                    desc="Model Responding")
+                    desc='Model Responding')
 
         for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [
                 reg.args for reg in requests
@@ -378,7 +379,7 @@ class VilaEval(lmms):
                                    self._config).to(self.device,
                                                     dtype=torch.float16)
 
-            qs = "<image>\n " + contexts
+            qs = '<image>\n ' + contexts
 
             conv = self.conv_template.copy()
 
@@ -390,8 +391,9 @@ class VilaEval(lmms):
                 prompt,
                 self._tokenizer,
                 IMAGE_TOKEN_INDEX,
-                return_tensors="pt").unsqueeze(0).cuda()
-            pad_token_ids = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id is not None else self._tokenizer.eos_token_id
+                return_tensors='pt').unsqueeze(0).cuda()
+            pad_token_ids = self._tokenizer.pad_token_id if self._tokenizer.pad_token_id \
+                is not None else self._tokenizer.eos_token_id
             attention_masks = input_ids.ne(pad_token_ids).long().cuda()
 
             stop_str = conv.sep if conv.sep_style != SeparatorStyle.TWO else conv.sep2
@@ -400,14 +402,14 @@ class VilaEval(lmms):
             stopping_criteria = KeywordsStoppingCriteria(
                 keywords, self._tokenizer, input_ids)
 
-            if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 1024
-            if "temperature" not in gen_kwargs:
-                gen_kwargs["temperature"] = 0.2
-            if "top_p" not in gen_kwargs:
-                gen_kwargs["top_p"] = None
-            if "num_beams" not in gen_kwargs:
-                gen_kwargs["num_beams"] = 1
+            if 'max_new_tokens' not in gen_kwargs:
+                gen_kwargs['max_new_tokens'] = 1024
+            if 'temperature' not in gen_kwargs:
+                gen_kwargs['temperature'] = 0.2
+            if 'top_p' not in gen_kwargs:
+                gen_kwargs['top_p'] = None
+            if 'num_beams' not in gen_kwargs:
+                gen_kwargs['num_beams'] = 1
 
             with torch.inference_mode():
                 output_ids = self._model.generate(
@@ -416,11 +418,11 @@ class VilaEval(lmms):
                     attention_mask=attention_masks,
                     use_cache=self.use_cache,
                     stopping_criteria=[stopping_criteria],
-                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                    temperature=gen_kwargs["temperature"],
-                    top_p=gen_kwargs["top_p"],
-                    num_beams=gen_kwargs["num_beams"],
-                    max_new_tokens=gen_kwargs["max_new_tokens"],
+                    do_sample=True if gen_kwargs['temperature'] > 0 else False,
+                    temperature=gen_kwargs['temperature'],
+                    top_p=gen_kwargs['top_p'],
+                    num_beams=gen_kwargs['num_beams'],
+                    max_new_tokens=gen_kwargs['max_new_tokens'],
                 )
 
             outputs = self._tokenizer.batch_decode(
@@ -432,4 +434,4 @@ class VilaEval(lmms):
         return res
 
     def generate_until_multi_round(self, requests) -> List[str]:
-        raise NotImplementedError("TODO: Implement multi-round generation")
+        raise NotImplementedError('TODO: Implement multi-round generation')

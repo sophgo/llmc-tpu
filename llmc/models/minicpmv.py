@@ -1,17 +1,19 @@
 from typing import List, Optional, Tuple, Union
-from transformers import AutoModelForCausalLM, AutoProcessor, AutoTokenizer, AutoConfig
-from loguru import logger
-from llmc.utils.registry_factory import MODEL_REGISTRY
-#from modeling_minicpmv import MiniCPMV
-from .minicpm import MiniCPM
-from tqdm import tqdm
-from typing import Optional, Union
+
+import torch
 from accelerate import Accelerator, DistributedType
 from accelerate.state import AcceleratorState
-import torch
-from PIL import Image
-from lmms_eval.api.model import lmms
 from lmms_eval.api.instance import Instance
+from lmms_eval.api.model import lmms
+from loguru import logger
+from PIL import Image
+from tqdm import tqdm
+from transformers import (AutoConfig, AutoModelForCausalLM, AutoProcessor,
+                          AutoTokenizer)
+
+from llmc.utils.registry_factory import MODEL_REGISTRY
+
+from .minicpm import MiniCPM
 
 
 @MODEL_REGISTRY
@@ -29,7 +31,7 @@ class MiniCPMV(MiniCPM):
             self.model_path,
             config=self.vlm_model_config,
             trust_remote_code=True,
-            torch_dtype="auto",
+            torch_dtype='auto',
             low_cpu_mem_usage=True,
         )
         self.mm_model = self.vlm_model
@@ -59,7 +61,6 @@ class MiniCPMV(MiniCPM):
             'add_answer', False)
         image_lists = []
         prompt_lists = []
-        #single_imsize = (448, 448)
         for idx in range(len(img_qas)):
             img_path = img_qas[idx]['image']
             question = img_qas[idx]['question']
@@ -68,12 +69,12 @@ class MiniCPMV(MiniCPM):
             if not add_answer:
                 msg = [{
                     'role': 'user',
-                    'content': "(<image>./</image>)\n" + question
+                    'content': '(<image>./</image>)\n' + question
                 }]
             else:
                 msg = [{
                     'role': 'user',
-                    'content': "(<image>./</image>)\n" + question
+                    'content': '(<image>./</image>)\n' + question
                 }, {
                     'role': 'assistant',
                     'content': answer
@@ -88,7 +89,7 @@ class MiniCPMV(MiniCPM):
             image_lists,
             max_slice_num=self.max_slice_nums,
             use_image_id=self.model_config.use_image_id,
-            return_tensors="pt",
+            return_tensors='pt',
             max_length=self.max_length).to(self.vlm_model.device).to(
                 next(self.vlm_model.parameters()).dtype)
         inputs.pop('image_sizes')
@@ -106,15 +107,13 @@ class MiniCPMV(MiniCPM):
 
 @MODEL_REGISTRY
 class MiniCPMVEval(lmms):
-    """
-    MiniCPM_V Model
-    """
+    """MiniCPM_V Model."""
 
     def __init__(
         self,
         llmc_model,
-        pretrained: str = "openbmb/MiniCPM-V",
-        device: Optional[str] = "cuda",
+        pretrained: str = 'openbmb/MiniCPM-V',
+        device: Optional[str] = 'cuda',
         dtype: Optional[Union[str, torch.dtype]] = torch.bfloat16,
         batch_size: Optional[Union[int, str]] = 1,
         trust_remote_code: Optional[bool] = True,
@@ -126,7 +125,7 @@ class MiniCPMVEval(lmms):
         accelerator = Accelerator()
         if accelerator.num_processes > 1:
             self._device = torch.device(
-                f"cuda:{accelerator.local_process_index}")
+                f'cuda:{accelerator.local_process_index}')
         else:
             self._device = device
         self._model = llmc_model.eval().cuda()
@@ -139,23 +138,28 @@ class MiniCPMVEval(lmms):
             assert accelerator.distributed_type in [
                 DistributedType.FSDP, DistributedType.MULTI_GPU,
                 DistributedType.DEEPSPEED
-            ], "Unsupported distributed type provided. Only DDP and FSDP are supported."
-            # If you want to use DistributedType.DEEPSPEED, you have to run accelerate config before using the model
-            # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the prepare model works
-            # I tried to set different parameters in the kwargs to let default zero 2 stage works, but it didn't work.
+            ], 'Unsupported distributed type provided. Only DDP and FSDP are supported.'
+            # If you want to use DistributedType.DEEPSPEED, you have to run accelerate
+            # config before using the model
+            # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the
+            # prepare model works
+            # I tried to set different parameters in the kwargs to let default zero 2 stage works,
+            # but it didn't work.
             if accelerator.distributed_type == DistributedType.DEEPSPEED:
                 kwargs = {
-                    "train_micro_batch_size_per_gpu":
+                    'train_micro_batch_size_per_gpu':
                     self.batch_size_per_gpu,
-                    "train_batch_size":
+                    'train_batch_size':
                     self.batch_size_per_gpu * accelerator.num_processes,
                 }
                 AcceleratorState().deepspeed_plugin.deepspeed_config_process(
                     must_match=True, **kwargs)
                 logger.info(
-                    "Detected that you are using DistributedType.DEEPSPEED. Make sure you run `accelerate config` and set zero stage to 0"
+                    'Detected that you are using DistributedType.DEEPSPEED. Make sure you run '
+                    '`accelerate config` and set zero stage to 0'
                 )
-            if accelerator.distributed_type == DistributedType.FSDP or accelerator.distributed_type == DistributedType.DEEPSPEED:
+            if accelerator.distributed_type == DistributedType.FSDP or \
+                    accelerator.distributed_type == DistributedType.DEEPSPEED:
                 self._model = accelerator.prepare(self.model)
             else:
                 self._model = accelerator.prepare_model(self.model,
@@ -163,7 +167,7 @@ class MiniCPMVEval(lmms):
             self.accelerator = accelerator
             if self.accelerator.is_local_main_process:
                 logger.info(
-                    f"Using {accelerator.num_processes} devices with data parallelism"
+                    f'Using {accelerator.num_processes} devices with data parallelism'
                 )
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
@@ -184,14 +188,13 @@ class MiniCPMVEval(lmms):
     @property
     def model(self):
         # returns the model, unwrapping it if using Accelerate
-        if hasattr(self, "accelerator"):
+        if hasattr(self, 'accelerator'):
             return self.accelerator.unwrap_model(self._model)
         else:
             return self._model
 
     @property
     def eot_token_id(self):
-        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
         return self.tokenizer.eos_token_id
 
     @property
@@ -218,7 +221,6 @@ class MiniCPMVEval(lmms):
                    string: str,
                    left_truncate_len=None,
                    add_special_tokens=None) -> List[int]:
-        """ """
         add_special_tokens = False if add_special_tokens is None else add_special_tokens
         encoding = self.tokenizer.encode(string,
                                          add_special_tokens=add_special_tokens)
@@ -233,7 +235,7 @@ class MiniCPMVEval(lmms):
     def loglikelihood(self,
                       requests: List[Instance]) -> List[Tuple[float, bool]]:
         # TODO
-        assert False, "We have not implemented this function for MiniCPM_V yet"
+        assert False, 'We have not implemented this function for MiniCPM_V yet'
 
     def flatten(self, input):
         new_list = []
@@ -246,7 +248,7 @@ class MiniCPMVEval(lmms):
         res = []
         pbar = tqdm(total=len(requests),
                     disable=(self.rank != 0),
-                    desc="Model Responding")
+                    desc='Model Responding')
 
         for contexts, gen_kwargs, doc_to_visual, doc_id, task, split in [
                 reg.args for reg in requests
@@ -264,4 +266,4 @@ class MiniCPMVEval(lmms):
         return res
 
     def generate_until_multi_round(self, requests) -> List[str]:
-        raise NotImplementedError("TODO: Implement multi-round generation")
+        raise NotImplementedError('TODO: Implement multi-round generation')
