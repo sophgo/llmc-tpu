@@ -4,88 +4,172 @@ from awq.utils.packing_utils import dequantize_gemm
 from awq.modules.linear.gemm import WQLinear_GEMM
 
 from importlib.metadata import version
+from typing import Dict, List, Type
+from transformers import Qwen2_5_VLForConditionalGeneration, AutoModelForCausalLM
 
-from transformers import AutoConfig, AutoModelForCausalLM, AutoTokenizer
 
-# yapf: disable
-Qwen2_5 = {
-    "block": [
-        "self_attn.q_proj",
-        "self_attn.k_proj",
-        "self_attn.v_proj",
-        "self_attn.o_proj",
-        "mlp.gate_proj",
-        "mlp.up_proj",
-        "mlp.down_proj",
-        "input_layernorm",
-        "post_attention_layernorm"
-    ]
+class ModelConfig:
+
+    def __init__(
+        self,
+        model_class: Type,
+        layers_attr: str = "layers",
+        hidden_layers_attr: str = "num_hidden_layers",
+        block_structure: List[str] = None,
+    ):
+        self.model_class = model_class
+        self.layers_attr = layers_attr  # e.g. "model.layers"
+        self.hidden_layers_attr = hidden_layers_attr  # e.g. "num_hidden_layers"
+        self.block_structure = block_structure
+
+
+# register the configuration of different models
+MODEL_CONFIGS: Dict[str, ModelConfig] = {
+    "qwen2.5_vl":
+    ModelConfig(
+        model_class=Qwen2_5_VLForConditionalGeneration,
+        layers_attr="model.layers",
+        block_structure=[
+            "self_attn.q_proj",
+            "self_attn.k_proj",
+            "self_attn.v_proj",
+            "self_attn.o_proj",
+            "mlp.gate_proj",
+            "mlp.up_proj",
+            "mlp.down_proj",
+            "input_layernorm",
+            "post_attention_layernorm",
+        ],
+    ),
+    "qwen2.5":
+    ModelConfig(
+        model_class=AutoModelForCausalLM,
+        layers_attr="model.layers",
+        block_structure=[
+            "self_attn.q_proj",
+            "self_attn.k_proj",
+            "self_attn.v_proj",
+            "self_attn.o_proj",
+            "mlp.gate_proj",
+            "mlp.up_proj",
+            "mlp.down_proj",
+            "input_layernorm",
+            "post_attention_layernorm",
+        ],
+    ),
 }
-# yapf: enable
 
 
-def func(pretrained_model, quant_model):
-    model_config = AutoConfig.from_pretrained(pretrained_model, trust_remote_code=True)
-    p_model = AutoModelForCausalLM.from_pretrained(pretrained_model,
-                                                   torch_dtype="auto",
-                                                   device_map="auto")
-    q_model = AutoModelForCausalLM.from_pretrained(quant_model,
-                                                   torch_dtype="auto",
-                                                   device_map="auto")
+def get_model_config(model_name: str) -> ModelConfig:
+    """support different model configurations"""
+    if model_name in MODEL_CONFIGS:
+        return MODEL_CONFIGS[model_name]
+    raise ValueError(f"Unsupported model type: {model_name}")
 
-    block_num = model_config.num_hidden_layers
-    for i in range(block_num):
-        for layer_name in Qwen2_5["block"]:
-            if '.' in layer_name:
-                parent_name, child_name = layer_name.split('.', 1)
-            else:
-                parent_name = None
-                child_name = layer_name
 
-            if parent_name:
-                q_parent = getattr(q_model.model.layers[i], parent_name)
-                p_parent = getattr(p_model.model.layers[i], parent_name)
-                q_layer = getattr(q_parent, child_name)
-                p_layer = getattr(p_parent, child_name)
-            else:
-                q_layer = getattr(q_model.model.layers[i], child_name)
-                p_layer = getattr(p_model.model.layers[i], child_name)
+def get_nested_attr(obj, attr_path: str):
+    """get nested attribute"""
+    for attr in attr_path.split("."):
+        obj = getattr(obj, attr)
+    return obj
 
-            if isinstance(q_layer, WQLinear_GEMM):
-                iweight = dequantize_gemm(q_layer.qweight, q_layer.qzeros, q_layer.scales,
-                                          q_layer.w_bit, q_layer.group_size)
-                iweight = iweight.T
-                iweight = iweight.to(device=p_layer.weight.device, dtype=p_layer.weight.dtype)
-                assert iweight.shape == p_layer.weight.shape, "Shape mismatch!"
-                p_layer.weight.data.copy_(iweight)
+
+def set_nested_attr(obj, attr_path: str, value):
+    """get nested attribute"""
+    attrs = attr_path.split(".")
+    for attr in attrs[:-1]:
+        obj = getattr(obj, attr)
+    setattr(obj, attrs[-1], value)
+
+
+def convert_weights(
+    pretrained_model: str,
+    quant_model: str,
+    model_type: str,
+    device_map: str = "auto",
+    torch_dtype="auto",
+):
+    model_config = get_model_config(model_type)
+
+    p_model = model_config.model_class.from_pretrained(pretrained_model,
+                                                       torch_dtype=torch_dtype,
+                                                       device_map=device_map)
+    q_model = model_config.model_class.from_pretrained(quant_model,
+                                                       torch_dtype=torch_dtype,
+                                                       device_map=device_map)
+
+    num_layers = getattr(p_model.config, model_config.hidden_layers_attr)
+    assert num_layers == getattr(q_model.config, model_config.hidden_layers_attr)
+
+    p_layers = get_nested_attr(p_model, model_config.layers_attr)
+    q_layers = get_nested_attr(q_model, model_config.layers_attr)
+
+    for layer_idx in range(num_layers):
+        p_layer = p_layers[layer_idx]
+        q_layer = q_layers[layer_idx]
+
+        for layer_path in model_config.block_structure:
+            try:
+                q_module = get_nested_attr(q_layer, layer_path)
+                p_module = get_nested_attr(p_layer, layer_path)
+            except AttributeError:
+                continue
+
+            if isinstance(q_module, WQLinear_GEMM):
+                iweight = dequantize_gemm(
+                    q_module.qweight,
+                    q_module.qzeros,
+                    q_module.scales,
+                    q_module.w_bit,
+                    q_module.group_size,
+                )
+                iweight = iweight.T.to(device=p_module.weight.device, dtype=p_module.weight.dtype)
+                if iweight.shape != p_module.weight.shape:
+                    raise RuntimeError(
+                        f"layer[{layer_idx}].{layer_path} shape mismatch: {iweight.shape} != {p_module.weight.shape}"
+                    )
+
+                p_module.weight.data.copy_(iweight)
                 print(
-                    f"Updated layer {i}.{layer_name}.weight"
-                    f"group:{q_layer.group_size}, bit:{q_layer.w_bit}, scale:{q_layer.scales}, zp:{q_layer.qzeros}"
+                    f"Updated layer {layer_idx}.{layer_path}.weight, group: {q_module.group_size}, w_bit: {q_module.w_bit}"
                 )
 
-                if hasattr(q_layer, 'bias') and q_layer.bias is not None:
-                    q_layer.bias = q_layer.bias.to(device=p_layer.bias.device,
-                                                   dtype=p_layer.bias.dtype)
-                    assert q_layer.bias.shape == p_layer.bias.shape, "Shape mismatch!"
-                    p_layer.bias.data.copy_(q_layer.bias)
-                    print(f"Updated layer {i}.{layer_name}.bias")
+                if hasattr(q_module, 'bias') and q_module.bias is not None:
+                    p_module.bias.data.copy_(
+                        q_module.bias.to(device=p_module.bias.device, dtype=p_module.bias.dtype))
+                    print(f"Updated layer {layer_idx}.{layer_path}.bias")
             else:
-                assert q_layer.weight.shape == p_layer.weight.shape, "Shape mismatch!"
-                p_layer.weight.data.copy_(q_layer.weight)
-                print(f"Updated layer {i}.{layer_name}")
+                # copy the weights of the non-quantized layers
+                if p_module.weight.shape != q_module.weight.shape:
+                    raise RuntimeError(
+                        f"layer[{layer_idx}].{layer_path} shape mismatch: {q_module.weight.shape} != {p_module.weight.shape}"
+                    )
+                p_module.weight.data.copy_(q_module.weight)
+                print(f"Updated layer {layer_idx}.{layer_path}.weight")
+                if hasattr(q_module, 'bias') and q_module.bias is not None:
+                    p_module.bias.data.copy_(
+                        q_module.bias.to(device=p_module.bias.device, dtype=p_module.bias.dtype))
+                    print(f"Updated layer {layer_idx}.{layer_path}.bias")
+
     p_model.save_pretrained(pretrained_model)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--pretrained_model_path', type=str)
-    parser.add_argument('--quant_model_path', type=str)
+    parser.add_argument('--awq_model_path', type=str)
+    parser.add_argument("--model_type",
+                        type=str,
+                        required=True,
+                        choices=MODEL_CONFIGS.keys(),
+                        help="Model type to process")
     args = parser.parse_args()
 
-    print(f"torch : {version('torch')}")
-    print(f"transformers : {version('transformers')}")
-    print(f"tokenizers : {version('tokenizers')}")
-    print(f"huggingface-hub : {version('huggingface-hub')}")
-    print(f"datasets : {version('datasets')}")
+    print(f"Torch version: {version('torch')}")
+    print(f"Transformers version: {version('transformers')}")
 
-    func(args.pretrained_model_path, args.quant_model_path)
+    convert_weights(
+        args.pretrained_model_path,
+        args.awq_model_path,
+        args.model_type,
+    )
