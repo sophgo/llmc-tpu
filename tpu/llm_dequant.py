@@ -2,10 +2,10 @@ import torch
 import argparse
 from awq.utils.packing_utils import dequantize_gemm
 from awq.modules.linear.gemm import WQLinear_GEMM
-
+import importlib
 from importlib.metadata import version
 from typing import Dict, List, Type
-from transformers import Qwen2_5_VLForConditionalGeneration, AutoModelForCausalLM
+import os
 
 
 class ModelConfig:
@@ -22,41 +22,49 @@ class ModelConfig:
         self.hidden_layers_attr = hidden_layers_attr  # e.g. "num_hidden_layers"
         self.block_structure = block_structure
 
+    def get_model_class(self):
+        module_path, class_name = self.model_class.rsplit('.', 1)
+        module = importlib.import_module(module_path)
+        return getattr(module, class_name)
+
+
+QWEN2_5_VL_CONFIG = ModelConfig(
+    model_class="transformers.Qwen2_5_VLForConditionalGeneration",
+    layers_attr="model.layers",
+    block_structure=[
+        "self_attn.q_proj",
+        "self_attn.k_proj",
+        "self_attn.v_proj",
+        "self_attn.o_proj",
+        "mlp.gate_proj",
+        "mlp.up_proj",
+        "mlp.down_proj",
+        "input_layernorm",
+        "post_attention_layernorm",
+    ],
+)
+
+QWEN2_CONFIG = ModelConfig(
+    model_class="transformers.AutoModelForCausalLM",
+    layers_attr="model.layers",
+    block_structure=[
+        "self_attn.q_proj",
+        "self_attn.k_proj",
+        "self_attn.v_proj",
+        "self_attn.o_proj",
+        "mlp.gate_proj",
+        "mlp.up_proj",
+        "mlp.down_proj",
+        "input_layernorm",
+        "post_attention_layernorm",
+    ],
+)
 
 # register the configuration of different models
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
-    "qwen2.5_vl":
-    ModelConfig(
-        model_class=Qwen2_5_VLForConditionalGeneration,
-        layers_attr="model.layers",
-        block_structure=[
-            "self_attn.q_proj",
-            "self_attn.k_proj",
-            "self_attn.v_proj",
-            "self_attn.o_proj",
-            "mlp.gate_proj",
-            "mlp.up_proj",
-            "mlp.down_proj",
-            "input_layernorm",
-            "post_attention_layernorm",
-        ],
-    ),
-    "qwen2.5":
-    ModelConfig(
-        model_class=AutoModelForCausalLM,
-        layers_attr="model.layers",
-        block_structure=[
-            "self_attn.q_proj",
-            "self_attn.k_proj",
-            "self_attn.v_proj",
-            "self_attn.o_proj",
-            "mlp.gate_proj",
-            "mlp.up_proj",
-            "mlp.down_proj",
-            "input_layernorm",
-            "post_attention_layernorm",
-        ],
-    ),
+    "qwen2.5_vl": QWEN2_5_VL_CONFIG,
+    "qwen2.5": QWEN2_CONFIG,
+    "qwen2": QWEN2_CONFIG,
 }
 
 
@@ -82,21 +90,36 @@ def set_nested_attr(obj, attr_path: str, value):
     setattr(obj, attrs[-1], value)
 
 
+def restore_json_file(pretrained_model: str):
+    import subprocess
+    if not os.path.isdir(pretrained_model):
+        raise ValueError(f"{pretrained_model} is not exist")
+    try:
+        subprocess.run(["git", "checkout", "--", "*.json"], cwd=pretrained_model, check=True)
+        print("retore json files successfully")
+    except subprocess.CalledProcessError as e:
+        print(f"restore json file failed: {e}")
+
+
 def convert_weights(
     pretrained_model: str,
     quant_model: str,
     model_type: str,
     device_map: str = "auto",
     torch_dtype="auto",
+    use_cpu: bool = False,
 ):
     model_config = get_model_config(model_type)
-
-    p_model = model_config.model_class.from_pretrained(pretrained_model,
-                                                       torch_dtype=torch_dtype,
-                                                       device_map=device_map)
-    q_model = model_config.model_class.from_pretrained(quant_model,
-                                                       torch_dtype=torch_dtype,
-                                                       device_map=device_map)
+    model_class = model_config.get_model_class()
+    p_model_map = "cpu" if use_cpu else "auto"
+    print(f"Loading pretrained model from {pretrained_model}")
+    p_model = model_class.from_pretrained(pretrained_model,
+                                          torch_dtype=torch_dtype,
+                                          device_map=p_model_map)
+    print(f"Loading quantized model from {quant_model}")
+    q_model = model_class.from_pretrained(quant_model,
+                                          torch_dtype=torch_dtype,
+                                          device_map=device_map)
 
     num_layers = getattr(p_model.config, model_config.hidden_layers_attr)
     assert num_layers == getattr(q_model.config, model_config.hidden_layers_attr)
@@ -152,24 +175,25 @@ def convert_weights(
                     print(f"Updated layer {layer_idx}.{layer_path}.bias")
 
     p_model.save_pretrained(pretrained_model)
+    restore_json_file(pretrained_model)
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--pretrained_model_path', type=str)
-    parser.add_argument('--awq_model_path', type=str)
+    parser.add_argument('--pretrained_model_path', type=str, required=True)
+    parser.add_argument('--awq_model_path', type=str, required=True)
     parser.add_argument("--model_type",
                         type=str,
                         required=True,
                         choices=MODEL_CONFIGS.keys(),
                         help="Model type to process")
+    parser.add_argument('--use_cpu', action='store_true', default=False)
     args = parser.parse_args()
 
     print(f"Torch version: {version('torch')}")
     print(f"Transformers version: {version('transformers')}")
 
-    convert_weights(
-        args.pretrained_model_path,
-        args.awq_model_path,
-        args.model_type,
-    )
+    convert_weights(args.pretrained_model_path,
+                    args.awq_model_path,
+                    args.model_type,
+                    use_cpu=args.use_cpu)
