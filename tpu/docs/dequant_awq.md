@@ -79,7 +79,7 @@ git clone git@hf.co:Qwen/Qwen2.5-VL-3B-Instruct-AWQ
 
 ``` shell
 cd /workspace/llmc-tpu
-python3 tpu/llm_dequant.py --pretrained_model_path /workspace/Qwen2.5-VL-3B-Instruct --awq_model_path /workspace/Qwen2.5-VL-3B-Instruct-AWQ --model_type qwen2.5_vl
+python3 tpu/llm_dequant.py --pretrained_model_path /workspace/Qwen2.5-VL-3B-Instruct --quant_model_path /workspace/Qwen2.5-VL-3B-Instruct-AWQ --model_type qwen2.5_vl
 ```
 反量化后的权重存储在`Qwen2.5-VL-3B-Instruct`中，可以验证其与`Qwen2.5-VL-3B-Instruct-AwQ`的结果是否高度一致。
 另外注意配置文件还是保持原来的，只需要二进制替换。
