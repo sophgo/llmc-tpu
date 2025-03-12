@@ -80,6 +80,7 @@ MINICPMV_CONFIG = ModelConfig(
 # register the configuration of different models
 MODEL_CONFIGS: Dict[str, ModelConfig] = {
     "qwen2.5_vl": QWEN2_5_VL_CONFIG,
+    "qwen2_vl": QWEN2_5_VL_CONFIG,
     "qwen2.5": QWEN2_CONFIG,
     "qwen2": QWEN2_CONFIG,
     "minicpmv": MINICPMV_CONFIG
