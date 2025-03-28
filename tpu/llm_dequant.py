@@ -240,17 +240,14 @@ def convert_weights(
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--pretrained_model_path', type=str, required=True)
-    parser.add_argument('--quant_model_path', type=str, required=True)
-    parser.add_argument("--model_type",
-                        type=str,
-                        required=True,
-                        choices=MODEL_CONFIGS.keys(),
+    # yapf: disable
+    parser.add_argument('-p', '--pretrained_model_path', type=str, required=True)
+    parser.add_argument('-q', '--quant_model_path', type=str, required=True)
+    parser.add_argument('-m', '--model_type', type=str, required=True, choices=MODEL_CONFIGS.keys(),
                         help="Model type to process")
-    parser.add_argument('--use_cpu',
-                        action='store_true',
-                        default=False,
+    parser.add_argument('--use_cpu', action='store_true', default=False,
                         help="Use CPU to load the pretrained model")
+    # yapf: enable
     args = parser.parse_args()
 
     print(f"Torch version: {version('torch')}")
