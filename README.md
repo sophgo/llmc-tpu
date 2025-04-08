@@ -126,13 +126,13 @@ python3 tools/download_eval_dataset.py --dataset_name wikitext2 --save_path tpu/
 1) 业务校准数据集
 
 如果模型经过下游业务数据集微调，在选择校准集时，通常应该选择业务数据集。
-* 如果是LLM，将业务数据集放置于上述LLM/cali目录下即可。至于数据集具体的格式，用户可以将一条一条数据文本，写到txt文件里面，每一行代表一条文本数据，使用上述的配置，可以实现自定义数据集的校准。
+* 如果是LLM，将业务数据集放置于上述LLM/cali目录下即可。至于数据集具体的格式，可以参考LLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里一定需要注意，最后的json文件应该命名为samples.json。
 * 如果是VLM，将业务数据集放置于上述VLM/cali目录下即可。至于数据集具体的格式，可以参考VLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里一定需要注意，最后的json文件应该命名为samples.json。
 
 2) 业务测试数据集
 
 如果模型经过下游业务数据集校准，在选择测试集时，通常应该选择业务数据集测试。
-* 如果是LLM，将业务数据集放置于上述LLM/eval目录下即可。至于数据集具体的格式，用户可以将一条一条数据文本，写到txt文件里面，每一行代表一条文本数据，使用上述的配置，可以实现自定义数据集的测试。
+* 如果是LLM，将业务数据集放置于上述LLM/eval目录下即可。至于数据集具体的格式，可以参考LLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里需要注意一定，最后的json文件应该命名为samples.json。
 * 如果是VLM，将业务数据集放置于上述VLM/eval目录下即可。至于数据集具体的格式，可以参考VLM/cali/general_custom_data中的格式，选择符合需求的格式即可。这里需要注意一定，最后的json文件应该命名为samples.json。
 
 
@@ -142,6 +142,8 @@ python3 tools/download_eval_dataset.py --dataset_name wikitext2 --save_path tpu/
 注意点：量化config文件包括了量化过程中所需的量化配置，用户可按照需求进行选择，同时为了对齐TPU硬件的配置也会对某些参数做出限制，具体可看下文详细介绍。
 
 #### config文件参数说明
+
+1) Qwen2VL
 
 ```yaml
 base:
@@ -178,7 +180,7 @@ quant:
     special:
         trans: True
         trans_version: v2
-        weight_clip: False
+        weight_clip: True
         clip_sym: True
 save:
     save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
@@ -188,7 +190,56 @@ run:
     task_type: VLM   # 设置成VLM或者LLM
 ```
 
-上面是以Awq算法为例构建的一个完整的config文件。为了简便用户操作，用户可以将上面直接拷贝到自己的config中，然后对有注解的部分参数进行修改。
+2) Qwen2.5-0.5B
+
+```yaml
+base:
+    seed: &seed 42
+model:
+    type: Qwen2 # 设置模型名, 具体支持的模型参见llmc/models目录
+    path: /workspace/Qwen2.5-0.5B    # 设置模型权重路径，请改成您需要的模型
+    torch_dtype: auto
+calib:
+    name: custom_txt   # 设置成实际的校准数据集名称，mme，pileval等等
+    download: False
+    apply_chat_template: True #调整system prompt 和 user prompt
+    path: /workspace/llmc-tpu/tpu/data/LLM/cali/general_custom_data  # 设置校准数据集路径
+    n_samples: 128 # 可以根据需要调整
+    bs: 1
+    seq_len: 512
+    preproc: random_truncate_txt
+    seed: *seed
+eval:
+    eval_pos: [pretrain, fake_quant]
+    name: custom_ppl  # 设置成实际的测试数据集名称，mme,wikitext2等等
+    download: False
+    path: /workspace/llmc-tpu/tpu/data/LLM/eval/general_custom_data # 设置测试数据集路径
+    bs: 1
+    apply_chat_template: True
+    seq_len: 2048
+    inference_per_block: False
+quant:
+    method: Awq
+    quant_objects: [language] # 默认只量化LLM部分，如要量化VIT部分，则设置成[vision, language]
+    weight:
+        bit: 4 # 设置成想要的量化bit，可以支持4或8
+        symmetric: False # 4bit填False；8bit填True
+        granularity: per_group # 4bit填per_group；8bit，填per_channel
+        group_size: 64 # 4bit填64(与TPU-MLIR对应)；8bit, 填-1
+    special:
+        trans: True
+        trans_version: v2
+        weight_clip: True
+        clip_sym: True
+save:
+    save_trans: True       # 当设置为True，可以保存下调整之后的浮点权重
+    save_path: /workspace/save_path # 设置保存权重的路径
+run:
+    task_name: awq_w_only # 配置任务名称
+    task_type: LLM   # 设置成VLM或者LLM
+```
+
+上面是以Awq算法为例构建的两个完整的config文件。为了简便用户操作，用户可以将上面直接拷贝到自己的config中，然后对有注解的部分参数进行修改。
 下面对重要的一些参数做详细的说明：
 
 | **参数**           | **描述**                                                  |
