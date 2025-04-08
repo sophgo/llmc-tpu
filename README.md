@@ -278,3 +278,7 @@ python3 tpu/llm_quant.py --config_path ./tpu/example.yml
 ``` shell
 python -m pip install -e .
 ```
+3. 如何添加prompt template?
+
+在llmc-tpu/llmc/models目录下找到对应的模型类，替换其中的apply_chat_template函数即可。
+
