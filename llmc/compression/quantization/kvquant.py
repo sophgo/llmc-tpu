@@ -27,7 +27,7 @@ class NaiveQuantKVCache(DynamicCache):
         self.static = kvquant_cfg.get('static', False)
         self._quantized_key_cache = []
         self._quantized_value_cache = []
-        self.transformed = False
+        self.use_org_kv = False
 
         if self.static:
             self._reset_buffers()
@@ -48,9 +48,8 @@ class NaiveQuantKVCache(DynamicCache):
         layer_idx,
         cache_kwargs,
     ):
-        if self.transformed:
-            super().update(key_states, value_states, layer_idx, cache_kwargs)
-
+        if self.use_org_kv:
+            return super().update(key_states, value_states, layer_idx, cache_kwargs)
         elif self.static and self.calib:
             self._calibration(layer_idx, key_states, value_states)
             keys_to_return, values_to_return = key_states, value_states
@@ -217,6 +216,8 @@ class NaiveQuantKVCache(DynamicCache):
         return scales, zeros, qmin, qmax
 
     def get_seq_length(self, layer_idx=0):
+        if self.use_org_kv:
+            return super().get_seq_length()
         if len(self._quantized_key_cache) <= layer_idx:
             return 0
         return self._seen_tokens if layer_idx == 0 else self._seen_tokens - 1
@@ -224,12 +225,10 @@ class NaiveQuantKVCache(DynamicCache):
 
 @KV_REGISTRY.register('Kivi')
 class KiviQuantKVCache(NaiveQuantKVCache):
-    def __init__(self, quant_type, kvquant_cfg, num_hidden_layers, num_samples, bsz):
+    def __init__(self, quant_type, kvquant_cfg, num_hidden_layers, num_samples=128, bsz=1):
         super().__init__(quant_type, kvquant_cfg, num_hidden_layers, num_samples, bsz)
         assert not self.static, 'Only support dynamic quantization for KIVI'
         self.residual_length = kvquant_cfg.get('residual_length', 128)
-        self.key_cache = []
-        self.value_cache = []
 
     def update(
         self,
@@ -238,51 +237,53 @@ class KiviQuantKVCache(NaiveQuantKVCache):
         layer_idx,
         cache_kwargs,
     ):
-        if layer_idx == 0:
-            self._seen_tokens += key_states.shape[-2]
-
-        if len(self.key_cache) <= layer_idx:
-            self._quantized_key_cache.append(self._quantize(key_states.contiguous(),
-                                                            layer_idx,
-                                                            is_key=True))
-            self._quantized_value_cache.append(self._quantize(value_states.contiguous(),
-                                                              layer_idx,
-                                                              is_key=False))
-            self.key_cache.append(torch.zeros(0,
-                                              dtype=key_states.dtype,
-                                              device=key_states.device))
-            self.value_cache.append(torch.zeros(0,
-                                                dtype=key_states.dtype,
-                                                device=key_states.device))
-            keys_to_return, values_to_return = key_states, value_states
+        if self.use_org_kv:
+            return super().update(key_states, value_states, layer_idx, cache_kwargs)
         else:
-            dequant_key = self._dequantize(self._quantized_key_cache[layer_idx])
-            dequant_value = self._dequantize(self._quantized_value_cache[layer_idx])
-            keys_to_return = [dequant_key, self.key_cache[layer_idx], key_states]
-            values_to_return = [dequant_value, self.value_cache[layer_idx], value_states]
+            if layer_idx == 0:
+                self._seen_tokens += key_states.shape[-2]
 
-            keys_to_return = torch.cat(keys_to_return, dim=-2)
-            values_to_return = torch.cat(values_to_return, dim=-2)
-            if (
-                self.key_cache[layer_idx].dim() == 4
-                and self.key_cache[layer_idx].shape[-2] + 1 >= self.residual_length
-            ):
-                self._quantized_key_cache[layer_idx] = self._quantize(keys_to_return.contiguous(),
-                                                                      layer_idx,
-                                                                      is_key=True)
-                self._quantized_value_cache[layer_idx] = self._quantize(
-                    values_to_return.contiguous(), layer_idx, is_key=False
-                )
-                self.key_cache[layer_idx] = torch.zeros(0,
-                                                        dtype=key_states.dtype,
-                                                        device=key_states.device)
-                self.value_cache[layer_idx] = torch.zeros(0,
-                                                          dtype=key_states.dtype,
-                                                          device=key_states.device)
+            if len(self.key_cache) <= layer_idx:
+                self._quantized_key_cache.append(self._quantize(key_states.contiguous(),
+                                                                layer_idx,
+                                                                is_key=True))
+                self._quantized_value_cache.append(self._quantize(value_states.contiguous(),
+                                                                  layer_idx,
+                                                                  is_key=False))
+                self.key_cache.append(torch.zeros(0,
+                                                  dtype=key_states.dtype,
+                                                  device=key_states.device))
+                self.value_cache.append(torch.zeros(0,
+                                                    dtype=key_states.dtype,
+                                                    device=key_states.device))
+                keys_to_return, values_to_return = key_states, value_states
             else:
-                self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states],
-                                                      dim=-2)
-                self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value_states],
-                                                        dim=-2)
+                dequant_key = self._dequantize(self._quantized_key_cache[layer_idx])
+                dequant_value = self._dequantize(self._quantized_value_cache[layer_idx])
+                keys_to_return = [dequant_key, self.key_cache[layer_idx], key_states]
+                values_to_return = [dequant_value, self.value_cache[layer_idx], value_states]
 
-        return keys_to_return, values_to_return
+                keys_to_return = torch.cat(keys_to_return, dim=-2)
+                values_to_return = torch.cat(values_to_return, dim=-2)
+                if (
+                    self.key_cache[layer_idx].dim() == 4
+                    and self.key_cache[layer_idx].shape[-2] + 1 >= self.residual_length
+                ):
+                    self._quantized_key_cache[layer_idx] = \
+                        self._quantize(keys_to_return.contiguous(), layer_idx, is_key=True)
+                    self._quantized_value_cache[layer_idx] = self._quantize(
+                        values_to_return.contiguous(), layer_idx, is_key=False
+                    )
+                    self.key_cache[layer_idx] = torch.zeros(0,
+                                                            dtype=key_states.dtype,
+                                                            device=key_states.device)
+                    self.value_cache[layer_idx] = torch.zeros(0,
+                                                              dtype=key_states.dtype,
+                                                              device=key_states.device)
+                else:
+                    self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key_states],
+                                                          dim=-2)
+                    self.value_cache[layer_idx] = \
+                        torch.cat([self.value_cache[layer_idx], value_states], dim=-2)
+
+            return keys_to_return, values_to_return

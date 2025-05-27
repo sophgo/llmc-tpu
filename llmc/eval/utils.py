@@ -3,14 +3,25 @@ import os
 
 from loguru import logger
 
-from llmc.eval import (AccuracyEval, CustomGenerate, HumanEval, PerplexityEval,
-                       TokenConsistencyEval, VQAEval)
+from llmc.eval import (AccuracyEval, CustomGenerate, DecodePerplexityEval,
+                       HumanEval, PerplexityEval, TokenConsistencyEval,
+                       VQAEval)
+from llmc.utils import deploy_all_modality
 
 
 def get_eval_list(model, config):
     eval_list = []
     if int(os.environ['RANK']) == 0:
         if 'eval' in config:
+            if 'type' in config.eval and config.eval.type == 'decode_ppl':
+                if 'pretrain' in config.eval.eval_pos:
+                    raise ValueError(
+                        'Unsupported: Evaluating decode_ppl with a pretrained model. '
+                    )
+                    # Pretrained models do not use key-value caching.
+                    # Please use a transformed model to evaluate decode_ppl
+                    # for the original model.
+
             if not isinstance(config.eval, list):
                 eval_config_list = [config.eval]
             else:
@@ -50,13 +61,17 @@ def get_eval_list(model, config):
                             eval_class = TokenConsistencyEval(model, config_for_eval)
                         elif config_tmp.eval.type == 'ppl':
                             eval_class = PerplexityEval(model, config_for_eval)
+                        elif config_tmp.eval.type == 'decode_ppl':
+                            eval_class = DecodePerplexityEval(model, config_for_eval)
                         else:
-                            raise ValueError(f'Unsupported eval type: {config_tmp.eval.type}')
+                            raise ValueError(
+                                f'Unsupported eval type: {config_tmp.eval.type}'
+                            )
                         eval_list.append((eval_class, config_for_eval))
     return eval_list
 
 
-def eval_model(model, blockwise_opt, eval_list, eval_pos):
+def eval_model(model, blockwise_opts, eval_list, eval_pos):
     if int(os.environ['RANK']) == 0:
         do_eval = False
         for _, config_for_eval in eval_list:
@@ -64,9 +79,9 @@ def eval_model(model, blockwise_opt, eval_list, eval_pos):
                 do_eval = True
         if do_eval:
             if eval_pos == 'transformed':
-                blockwise_opt.deploy('origin_float')
-            elif eval_pos == 'fake_quant':
-                blockwise_opt.deploy('fake_quant')
+                deploy_all_modality(blockwise_opts, 'origin_float')
+            elif eval_pos in ['fake_quant', 'fake_quant_wo_kv']:
+                deploy_all_modality(blockwise_opts, 'fake_quant')
             for eval_class, config_for_eval in eval_list:
                 if eval_pos in config_for_eval.eval.eval_pos:
                     res = eval_class.eval(model)

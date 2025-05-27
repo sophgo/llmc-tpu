@@ -8,6 +8,17 @@ import torch.nn.functional as F
 from loguru import logger
 from transformers.pytorch_utils import ALL_LAYERNORM_LAYERS
 
+from .quant import FloatQuantizer
+from .utils import is_fp8_supported_gpu
+
+if is_fp8_supported_gpu():
+    from .fp8_kernel import act_quant, fp8_gemm, weight_cast_to_bf16
+    USE_FP8GEMM_TRITON_KERNEL = True
+    logger.info('import fp8_kernel successful.')
+else:
+    USE_FP8GEMM_TRITON_KERNEL = False
+    from .quant import weight_cast_to_bf16
+
 try:
     import fast_hadamard_transform
 
@@ -21,399 +32,70 @@ except Exception:
 from .utils import calculate_zeros_width
 
 
-class LlmcMatmul(nn.Module):
-    def __init__(self, a1_qdq=None, a2_qdq=None):
+def block_wise_fp8_forward_func(x, w, w_scale, block_size, bias):
+    x, scale = act_quant(x, block_size)
+    y = fp8_gemm(x, scale, w, w_scale).to(torch.bfloat16)
+    if bias is not None:
+        y += bias
+    return y
+
+
+class LlmcFp8Linear(nn.Module):
+    def __init__(self, in_features, out_features, bias, block_size=128):
         super().__init__()
-        self.a1_qdq = a1_qdq
-        self.a2_qdq = a2_qdq
-        self.calib = True
-
-    def forward(self, x1, x2):
-        if self.a1_qdq is not None and not self.calib:
-            x1 = self.a1_qdq(x1, self)
-        if self.a2_qdq is not None and not self.calib:
-            x2 = self.a2_qdq(x2, self)
-        out = torch.matmul(x1, x2)
-        return out
-
-    def __repr__(self):
-        return f'LlmcMatmul(calib={self.calib})'
-
-
-class LlmcSoftmax(nn.Module):
-    def __init__(self, a_qdq=None):
-        super().__init__()
-        self.a_qdq = a_qdq
-        self.calib = True
-
-    def forward(self, x, dim=-1, dtype=None):
-        if self.a_qdq is not None and not self.calib:
-            x = self.a_qdq(x, self)
-        out = nn.functional.softmax(x, dim=dim, dtype=dtype)
-        return out
-
-    def __repr__(self):
-        return f'LlmcSoftmax(calib={self.calib})'
-
-
-class LlmcViTSelfAttention(nn.Module):
-    def __init__(
-        self,
-        query,
-        key,
-        value,
-        num_attention_heads,
-        attention_head_size,
-        all_head_size,
-        dropout,
-        matmul_a1_qdq,
-        matmul_a2_qdq,
-        softmax_a_qdq,
-    ):
-        super().__init__()
-        self.num_attention_heads = num_attention_heads
-        self.attention_head_size = attention_head_size
-        self.all_head_size = all_head_size
-        self.query = query
-        self.key = key
-        self.value = value
-
-        self.dropout = dropout
-
-        self.matmul_1 = LlmcMatmul(matmul_a1_qdq, matmul_a2_qdq)
-        self.matmul_2 = LlmcMatmul(matmul_a1_qdq, matmul_a2_qdq)
-        self.softmax = LlmcSoftmax(softmax_a_qdq)
-
-    def transpose_for_scores(self, x):
-        new_x_shape = x.size()[:-1] + (
-            self.num_attention_heads,
-            self.attention_head_size,
-        )
-        x = x.view(new_x_shape)
-        return x.permute(0, 2, 1, 3)
-
-    def forward(self, hidden_states, head_mask=None, output_attentions=False):
-        mixed_query_layer = self.query(hidden_states)
-
-        key_layer = self.transpose_for_scores(self.key(hidden_states))
-        value_layer = self.transpose_for_scores(self.value(hidden_states))
-        query_layer = self.transpose_for_scores(mixed_query_layer)
-
-        attention_scores = self.matmul_1(query_layer, key_layer.transpose(-1, -2))
-        attention_scores = attention_scores / math.sqrt(self.attention_head_size)
-
-        attention_probs = self.softmax(attention_scores, dim=-1)
-        attention_probs = self.dropout(attention_probs)
-
-        if head_mask is not None:
-            attention_probs = attention_probs * head_mask
-
-        context_layer = self.matmul_2(attention_probs, value_layer)
-
-        context_layer = context_layer.permute(0, 2, 1, 3).contiguous()
-        new_context_layer_shape = context_layer.size()[:-2] + (self.all_head_size,)
-        context_layer = context_layer.view(new_context_layer_shape)
-
-        outputs = (
-            (context_layer, attention_probs) if output_attentions else (context_layer,)
-        )
-
-        return outputs
-
-    @classmethod
-    @torch.no_grad()
-    def new(cls, module, matmul_a1_qdq=None, matmul_a2_qdq=None, softmax_a_qdq=None):
-        query, key, value = module.query, module.key, module.value
-        num_attention_heads = module.num_attention_heads
-        attention_head_size = module.attention_head_size
-        all_head_size = module.all_head_size
-        dropout = module.dropout
-        new_module = cls(
-            query,
-            key,
-            value,
-            num_attention_heads,
-            attention_head_size,
-            all_head_size,
-            dropout,
-            matmul_a1_qdq,
-            matmul_a2_qdq,
-            softmax_a_qdq,
-        )
-        return new_module
-
-    def __repr__(self):
-        return (
-            f'LlmcViTSelfAttention(\n'
-            f'  (query): {self.query}\n'
-            f'  (key): {self.key}\n'
-            f'  (value): {self.value}\n'
-            f'  (dropout): {self.dropout}\n'
-            f'  (matmul_1): {self.matmul_1}\n'
-            f'  (matmul_2): {self.matmul_2}\n'
-            f'  (softmax): {self.softmax}\n'
-            f')'
-        )
-
-
-class LlmcDeepseekAttention(nn.Module):
-    def __init__(
-        self,
-        config,
-        layer_idx,
-        attention_dropout,
-        hidden_size,
-        num_heads,
-        max_position_embeddings,
-        rope_theta,
-        q_lora_rank,
-        qk_rope_head_dim,
-        kv_lora_rank,
-        v_head_dim,
-        qk_nope_head_dim,
-        q_head_dim,
-        is_causal,
-        q_proj,
-        q_a_proj,
-        q_a_layernorm,
-        q_b_proj,
-        kv_a_proj_with_mqa,
-        kv_a_layernorm,
-        kv_b_proj,
-        o_proj,
-        rotary_emb,
-        softmax_scale,
-        matmul_a1_qdq,
-        matmul_a2_qdq,
-        softmax_a_qdq,
-    ):
-        super().__init__()
-        self.config = config
-        self.layer_idx = layer_idx
-        self.attention_dropout = attention_dropout
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.max_position_embeddings = max_position_embeddings
-        self.rope_theta = rope_theta
-        self.q_lora_rank = q_lora_rank
-        self.qk_rope_head_dim = qk_rope_head_dim
-        self.kv_lora_rank = kv_lora_rank
-        self.v_head_dim = v_head_dim
-        self.qk_nope_head_dim = qk_nope_head_dim
-        self.q_head_dim = q_head_dim
-        self.is_causal = is_causal
-        self.q_proj = q_proj
-        self.q_a_proj = q_a_proj
-        self.q_a_layernorm = q_a_layernorm
-        self.q_b_proj = q_b_proj
-        self.kv_a_proj_with_mqa = kv_a_proj_with_mqa
-        self.kv_a_layernorm = kv_a_layernorm
-        self.kv_b_proj = kv_b_proj
-        self.o_proj = o_proj
-        self.rotary_emb = rotary_emb
-        self.softmax_scale = softmax_scale
-        self.matmul_1 = LlmcMatmul(matmul_a1_qdq, matmul_a2_qdq)
-        self.matmul_2 = LlmcMatmul(matmul_a1_qdq, matmul_a2_qdq)
-        self.softmax = LlmcSoftmax(softmax_a_qdq)
-
-    def _shape(self, tensor, seq_len, bsz):
-        return (
-            tensor.view(bsz, seq_len, self.num_heads, self.v_head_dim)
-            .transpose(1, 2)
-            .contiguous()
-        )
-
-    def rotate_half(self, x):
-        """Rotates half the hidden dims of the input."""
-        x1 = x[..., : x.shape[-1] // 2]
-        x2 = x[..., x.shape[-1] // 2:]
-        return torch.cat((-x2, x1), dim=-1)
-
-    def apply_rotary_pos_emb(self, q, k, cos, sin, position_ids, unsqueeze_dim=1):
-        cos = cos[position_ids].unsqueeze(unsqueeze_dim)
-        sin = sin[position_ids].unsqueeze(unsqueeze_dim)
-
-        b, h, s, d = q.shape
-        q = q.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
-
-        b, h, s, d = k.shape
-        k = k.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
-
-        q_embed = (q * cos) + (self.rotate_half(q) * sin)
-        k_embed = (k * cos) + (self.rotate_half(k) * sin)
-        return q_embed, k_embed
-
-    @classmethod
-    @torch.no_grad()
-    def new(cls, module, matmul_a1_qdq=None, matmul_a2_qdq=None, softmax_a_qdq=None):
-
-        config = module.config
-        layer_idx = module.layer_idx
-
-        attention_dropout = module.config.attention_dropout
-        hidden_size = module.config.hidden_size
-        num_heads = module.config.num_attention_heads
-
-        max_position_embeddings = module.config.max_position_embeddings
-        rope_theta = module.config.rope_theta
-        q_lora_rank = module.config.q_lora_rank
-        qk_rope_head_dim = module.config.qk_rope_head_dim
-        kv_lora_rank = module.config.kv_lora_rank
-        v_head_dim = module.config.v_head_dim
-        qk_nope_head_dim = module.config.qk_nope_head_dim
-        q_head_dim = module.q_head_dim
-        is_causal = module.is_causal
-
-        if q_lora_rank is None:
-            q_proj = module.q_proj
-            q_a_proj = None
-            q_a_layernorm = None
-            q_b_proj = None
+        self.block_size = block_size
+        self.in_features = in_features
+        self.out_features = out_features
+        if bias:
+            self.bias = nn.Parameter(torch.empty(out_features))
         else:
-            q_proj = None
-            q_a_proj = module.q_a_proj
-            q_a_layernorm = module.q_a_layernorm
-            q_b_proj = module.q_b_proj
+            self.register_parameter('bias', None)
 
-        kv_a_proj_with_mqa = module.kv_a_proj_with_mqa
-        kv_a_layernorm = module.kv_a_layernorm
-        kv_b_proj = module.kv_b_proj
-
-        o_proj = module.o_proj
-        rotary_emb = module.rotary_emb
-
-        softmax_scale = module.softmax_scale
-
-        new_module = cls(
-            config=config,
-            layer_idx=layer_idx,
-            attention_dropout=attention_dropout,
-            hidden_size=hidden_size,
-            num_heads=num_heads,
-            max_position_embeddings=max_position_embeddings,
-            rope_theta=rope_theta,
-            q_lora_rank=q_lora_rank,
-            qk_rope_head_dim=qk_rope_head_dim,
-            kv_lora_rank=kv_lora_rank,
-            v_head_dim=v_head_dim,
-            qk_nope_head_dim=qk_nope_head_dim,
-            q_head_dim=q_head_dim,
-            is_causal=is_causal,
-            q_proj=q_proj,
-            q_a_proj=q_a_proj,
-            q_a_layernorm=q_a_layernorm,
-            q_b_proj=q_b_proj,
-            kv_a_proj_with_mqa=kv_a_proj_with_mqa,
-            kv_a_layernorm=kv_a_layernorm,
-            kv_b_proj=kv_b_proj,
-            o_proj=o_proj,
-            rotary_emb=rotary_emb,
-            softmax_scale=softmax_scale,
-            matmul_a1_qdq=matmul_a1_qdq,
-            matmul_a2_qdq=matmul_a2_qdq,
-            softmax_a_qdq=softmax_a_qdq,
+        # Init empty weight and scale
+        self.weight = nn.Parameter(
+            torch.empty(out_features, in_features, dtype=torch.float8_e4m3fn)
+        )
+        scale_out_features = (out_features + block_size - 1) // block_size
+        scale_in_features = (in_features + block_size - 1) // block_size
+        self.weight_scale_inv = nn.Parameter(
+            torch.empty(scale_out_features, scale_in_features, dtype=torch.float32)
         )
 
-        return new_module
-
-    def forward(
-        self,
-        hidden_states,
-        attention_mask,
-        position_ids,
-        past_key_value,
-        output_attentions,
-        use_cache,
-        **kwargs,
-    ):
-        bsz, q_len, _ = hidden_states.size()
-        if self.q_lora_rank is None:
-            q = self.q_proj(hidden_states)
-        else:
-            q = self.q_b_proj(self.q_a_layernorm(self.q_a_proj(hidden_states)))
-
-        q = q.view(bsz, q_len, self.num_heads, self.q_head_dim).transpose(1, 2)
-        q_nope, q_pe = torch.split(
-            q, [self.qk_nope_head_dim, self.qk_rope_head_dim], dim=-1
-        )
-
-        compressed_kv = self.kv_a_proj_with_mqa(hidden_states)
-        compressed_kv, k_pe = torch.split(
-            compressed_kv, [self.kv_lora_rank, self.qk_rope_head_dim], dim=-1
-        )
-        k_pe = k_pe.view(bsz, q_len, 1, self.qk_rope_head_dim).transpose(1, 2)
-        kv = (
-            self.kv_b_proj(self.kv_a_layernorm(compressed_kv))
-            .view(bsz, q_len, self.num_heads, self.qk_nope_head_dim + self.v_head_dim)
-            .transpose(1, 2)
-        )
-
-        k_nope, value_states = torch.split(
-            kv, [self.qk_nope_head_dim, self.v_head_dim], dim=-1
-        )
-        kv_seq_len = value_states.shape[-2]
-        if past_key_value is not None:
-            kv_seq_len += past_key_value.get_usable_length(kv_seq_len, self.layer_idx)
-        cos, sin = self.rotary_emb(value_states, seq_len=kv_seq_len)
-
-        q_pe, k_pe = self.apply_rotary_pos_emb(q_pe, k_pe, cos, sin, position_ids)
-
-        query_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-        query_states[:, :, :, : self.qk_nope_head_dim] = q_nope
-        query_states[:, :, :, self.qk_nope_head_dim:] = q_pe
-
-        key_states = k_pe.new_empty(bsz, self.num_heads, q_len, self.q_head_dim)
-        key_states[:, :, :, : self.qk_nope_head_dim] = k_nope
-        key_states[:, :, :, self.qk_nope_head_dim:] = k_pe
-        if past_key_value is not None:
-            cache_kwargs = {'sin': sin, 'cos': cos}  # Specific to RoPE models
-            key_states, value_states = past_key_value.update(
-                key_states, value_states, self.layer_idx, cache_kwargs
-            )
-
-        attn_weights = (
-            self.matmul_1(query_states, key_states.transpose(2, 3)) * self.softmax_scale
-        )
-
-        if attn_weights.size() != (bsz, self.num_heads, q_len, kv_seq_len):
-            raise ValueError(
-                f'Attention weights should be of size {(bsz, self.num_heads, q_len, kv_seq_len)},'
-                f'but is {attn_weights.size()}'
-            )
-        assert attention_mask is not None
-        if attention_mask is not None:
-            if attention_mask.size() != (bsz, 1, q_len, kv_seq_len):
-                raise ValueError(
-                    f'Attention mask should be of size {(bsz, 1, q_len, kv_seq_len)},'
-                    f'but is {attention_mask.size()}'
+    def forward(self, x):
+        if self.weight.data.dtype == torch.float8_e4m3fn:
+            if USE_FP8GEMM_TRITON_KERNEL:
+                y = block_wise_fp8_forward_func(
+                    x, self.weight, self.weight_scale_inv, self.block_size, self.bias
                 )
-            attn_weights = attn_weights + attention_mask
+                return y
+            else:
+                self.weight.data \
+                    = weight_cast_to_bf16(self.weight.data,
+                                          self.weight_scale_inv.data).to(torch.bfloat16)
+        y = torch.functional.F.linear(x, self.weight, self.bias)
+        return y
 
-        # upcast attention to fp32
-        attn_weights = self.softmax(attn_weights, dim=-1, dtype=torch.float32).to(
-            query_states.dtype
+    @classmethod
+    @torch.no_grad()
+    def new(cls, module):
+        in_features = module.in_features
+        out_features = module.out_features
+        bias = module.bias
+        new_module = cls(in_features, out_features, bias)
+        return new_module
+
+    def __repr__(self):
+        return (
+            'LlmcFp8Linear('
+            + f'in_features={self.in_features}, '
+            + f'out_features={self.out_features}, '
+            + f'bias={self.bias is not None}, '
+            + f'weight_shape={self.weight.shape}, '
+            + f'weight_dtype={self.weight.dtype}, '
+            # + f"scales_shape={self.weight_scale_inv.shape}, "
+            # + f"scales_dtype={self.weight_scale_inv.dtype}, "
+            + f'use_fp8gemm_triton_kernel={USE_FP8GEMM_TRITON_KERNEL})'
         )
-        attn_weights = nn.functional.dropout(
-            attn_weights, p=self.attention_dropout, training=self.training
-        )
-        attn_output = self.matmul_2(attn_weights, value_states)
-
-        if attn_output.size() != (bsz, self.num_heads, q_len, self.v_head_dim):
-            raise ValueError(
-                f'`attn_output` should be of size {(bsz, self.num_heads, q_len, self.v_head_dim)},'
-                f' but is {attn_output.size()}'
-            )
-
-        attn_output = attn_output.transpose(1, 2).contiguous()
-
-        attn_output = attn_output.reshape(bsz, q_len, self.num_heads * self.v_head_dim)
-
-        attn_output = self.o_proj(attn_output)
-
-        if not output_attentions:
-            attn_weights = None
-
-        return attn_output, attn_weights, past_key_value
 
 
 class LlmcActFn(nn.Module):
@@ -632,14 +314,27 @@ class OriginFloatLinear(nn.Module):
                 self.register_buffer(name, buf.data)
         if hasattr(self, 'buf_rotate') and self.buf_rotate:
             self.rotater = ori_module.rotater
+        else:
+            self.buf_rotate = False
+
+        if self.weight.data.dtype == torch.float8_e4m3fn:
+            self.fp8_forward = True
+            self.weight_scale_inv = ori_module.weight_scale_inv
+            self.block_size = 128
+        else:
+            self.fp8_forward = False
 
     @torch.no_grad()
     def forward(self, x):
         if hasattr(self, 'buf_rotate') and self.buf_rotate:
             x = self.rotater.rotate(x)
-
-        x = torch.functional.F.linear(x, self.weight, self.bias)
-        return x
+        if self.fp8_forward:
+            y = block_wise_fp8_forward_func(
+                x, self.weight, self.weight_scale_inv, self.block_size, self.bias
+            )
+        else:
+            y = torch.functional.F.linear(x, self.weight, self.bias)
+        return y
 
     @classmethod
     @torch.no_grad()
@@ -663,6 +358,8 @@ class OriginFloatLinear(nn.Module):
         return (
             f'OriginFloatLinear(in_features={self.in_features},'
             f'out_features={self.out_features},'
+            f'online_rotate={self.buf_rotate},'
+            f'fp8_forward={self.fp8_forward},'
             f'bias={self.bias is not None})'
         )
 
@@ -816,6 +513,13 @@ class FakeQuantLinear(nn.Module):
         else:
             self.buf_rotate = False
 
+        if self.weight.data.dtype == torch.float8_e4m3fn:
+            self.fp8_forward = True
+            self.weight_scale_inv = ori_module.weight_scale_inv
+            self.block_size = 128
+        else:
+            self.fp8_forward = False
+
         self.dynamic_quant_weight = False
         self.dynamic_quant_tmp_weight = False
 
@@ -838,8 +542,13 @@ class FakeQuantLinear(nn.Module):
         elif self.dynamic_quant_tmp_weight:
             self.tmp_weight = self.w_qdq(self)
 
-        x = torch.functional.F.linear(x, self.tmp_weight, self.tmp_bias)
-        return x
+        if self.fp8_forward:
+            y = block_wise_fp8_forward_func(
+                x, self.weight, self.weight_scale_inv, self.block_size, self.bias
+            )
+        else:
+            y = torch.functional.F.linear(x, self.tmp_weight, self.tmp_bias)
+        return y
 
     @classmethod
     @torch.no_grad()
@@ -889,22 +598,33 @@ class EffcientFakeQuantLinear(nn.Module):
         for name, buf in ori_module.named_buffers():
             if name.startswith('buf_'):
                 self.register_buffer(name, buf.data)
-
         if hasattr(self, 'buf_rotate') and self.buf_rotate:
             self.rotater = ori_module.rotater
         else:
             self.buf_rotate = False
 
+        if self.weight.data.dtype == torch.float8_e4m3fn:
+            self.fp8_forward = True
+            self.weight_scale_inv = ori_module.weight_scale_inv
+            self.block_size = 128
+        else:
+            self.fp8_forward = False
+
     @torch.no_grad()
-    def forward(self, x, dtype=None):
+    def forward(self, x):
         if hasattr(self, 'buf_rotate') and self.buf_rotate:
             x = self.rotater.rotate(x)
 
         if self.a_qdq is not None:
             x = self.a_qdq(x, self)
 
-        x = torch.functional.F.linear(x, self.weight, self.bias)
-        return x
+        if self.fp8_forward:
+            y = block_wise_fp8_forward_func(
+                x, self.weight, self.weight_scale_inv, self.block_size, self.bias
+            )
+        else:
+            y = torch.functional.F.linear(x, self.weight, self.bias)
+        return y
 
     @classmethod
     @torch.no_grad()
@@ -941,12 +661,13 @@ class EffcientFakeQuantLinear(nn.Module):
             f'weight_quant={self.w_qdq_name},'
             f'act_quant={self.a_qdq_name},'
             f'online_rotate={self.buf_rotate},'
+            f'fp8_forward={self.fp8_forward},'
             f'debug_print={self.debug_print})'
         )
 
 
 class VllmRealQuantLinear(nn.Module):
-    def __init__(self, weight, bias, scales, input_scale, need_pack):
+    def __init__(self, weight, bias, scales, input_scale, need_pack, scales_name):
         super().__init__()
         weight_name = 'weight_packed' if need_pack else 'weight'
         self.register_buffer(weight_name, weight)
@@ -957,7 +678,7 @@ class VllmRealQuantLinear(nn.Module):
             else setattr(self, 'bias', None)
         )
 
-        self.register_buffer('weight_scale', scales)
+        self.register_buffer(scales_name, scales)
         self.register_buffer('input_scale', input_scale)
 
     @torch.no_grad()
@@ -973,7 +694,8 @@ class VllmRealQuantLinear(nn.Module):
         else:
             input_scale = None
         if (
-            quant_config.act.get('static', False)
+            'act' in quant_config
+            and quant_config.act.get('static', False)
             and quant_config.get('quant_type', 'int-quant') == 'int-quant'
         ):
             input_scale = input_scale.unsqueeze(0)
@@ -984,7 +706,13 @@ class VllmRealQuantLinear(nn.Module):
             bias = None
 
         need_pack = quant_config['weight'].get('need_pack', False)
-        new_module = cls(weight, bias, scales, input_scale, need_pack)
+
+        if quant_config['weight']['granularity'] == 'per_block':
+            scales_name = 'weight_scale_inv'
+        else:
+            scales_name = 'weight_scale'
+
+        new_module = cls(weight, bias, scales, input_scale, need_pack, scales_name)
         new_module.in_features = module.in_features
         new_module.out_features = module.out_features
         new_module.weight_shape = weight.shape
@@ -1000,6 +728,10 @@ class VllmRealQuantLinear(nn.Module):
     @classmethod
     @torch.no_grad()
     def quant_pack(cls, module, w_q, quant_config):
+        if module.weight.data.dtype == torch.float8_e4m3fn:
+            module.weight.data = weight_cast_to_bf16(
+                module.weight.data, module.weight_scale_inv.data
+            ).to(torch.bfloat16)
         weight, scales, zeros = w_q(module)
         need_pack = quant_config['weight'].get('need_pack', False)
         if need_pack:
@@ -1011,7 +743,6 @@ class VllmRealQuantLinear(nn.Module):
     def pack(self, weight, scales, quant_config):
 
         # Packs a tensor of quantized weights stored in int8 into int32s with padding
-        scales = scales.to(torch.float16)
         num_bits = quant_config['weight']['bit']
 
         # convert to unsigned for packing
@@ -1031,8 +762,9 @@ class VllmRealQuantLinear(nn.Module):
             packed |= weight[:, i::pack_factor] << num_bits * i
 
         packed = np.ascontiguousarray(packed).view(np.int32)
-        int_weight = torch.from_numpy(packed)
-        return int_weight, scales
+        int_weight = torch.from_numpy(packed).cuda()
+        del weight, packed
+        return int_weight, scales.to(torch.float16)
 
     def __repr__(self):
         return (
@@ -1139,6 +871,10 @@ class AutoawqRealQuantLinear(nn.Module):
     @classmethod
     @torch.no_grad()
     def quant_pack(cls, module, w_q, quant_config):
+        if module.weight.data.dtype == torch.float8_e4m3fn:
+            module.weight.data = weight_cast_to_bf16(
+                module.weight.data, module.weight_scale_inv.data
+            ).to(torch.bfloat16)
         weight, scales, zeros = w_q(module)
         pack_version = quant_config['weight']['pack_version']
         if pack_version == 'gemm_pack':
@@ -1195,7 +931,7 @@ class AutoawqRealQuantLinear(nn.Module):
                     int_zeros[:, col] |= intzero_col << (i * bit)
         else:
             int_zeros = None
-
+        del weight
         return int_weight, scales, int_zeros
 
     @classmethod
@@ -1319,6 +1055,7 @@ _LLMC_LN_TYPES_ = [
 
 
 _LLMC_LINEAR_TYPES_ = [
+    LlmcFp8Linear,
     OriginFloatLinear,
     RotateLinear,
     FakeQuantLinear,
@@ -1329,8 +1066,6 @@ _LLMC_LINEAR_TYPES_ = [
     MlcllmRealQuantLinear,
     LightllmRealQuantLinear,
 ]
-
-_LLMC_ATTN_MAP_ = {'Vit': LlmcViTSelfAttention, 'DeepseekV2': LlmcDeepseekAttention}
 
 _REALQUANT_LINEAR_MAP_ = {
     'vllm_quant': VllmRealQuantLinear,

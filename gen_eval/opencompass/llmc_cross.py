@@ -1,0 +1,1 @@
+from gen_eval.opencompass_model import LLMC

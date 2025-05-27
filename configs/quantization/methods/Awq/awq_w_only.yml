@@ -28,7 +28,7 @@ quant:
     method: Awq
     weight:
         bit: 4
-        symmetric: False
+        symmetric: True
         granularity: per_group
         group_size: 128
     special:
