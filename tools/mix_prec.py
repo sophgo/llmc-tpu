@@ -133,6 +133,7 @@ def draw(save_path, save_name, X, Y1, Y2):
 
 
 def analysis_block_cosine(res, t_res, args, is_input=True):
+    global t_average_blk_cos
     cosine_sim = nn.CosineSimilarity()
 
     for name in res:
@@ -148,17 +149,20 @@ def analysis_block_cosine(res, t_res, args, is_input=True):
 
             layer_cosine_dict[name].append(cos.item())
 
-        for name in layer_cosine_dict:
-            cos_values = layer_cosine_dict[name]
-            min_cos = min(cos_values)
-            avg_cos = sum(cos_values) / len(cos_values)
-            if is_input:
-                logger.info(f"{name} input min_cos : {min_cos} avg_cos : {avg_cos}")
-            else:
-                logger.info(f"{name} output min_cos : {min_cos} avg_cos : {avg_cos}")
+    for name in layer_cosine_dict:
+        cos_values = layer_cosine_dict[name]
+        min_cos = min(cos_values)
+        avg_cos = sum(cos_values) / len(cos_values)
+        if is_input:
+            logger.info(f"{name} input min_cos : {min_cos} avg_cos : {avg_cos}")
+        else:
+            logger.info(f"{name} output min_cos : {min_cos} avg_cos : {avg_cos}")
+        if 'down_proj' in name and not is_input:
+            t_average_blk_cos[name] = avg_cos
 
 
 def analysis_block_mse(res, t_res, args):
+    global t_average_blk_mse
     mse_sim = nn.MSELoss()
 
     for name in res:
@@ -174,12 +178,78 @@ def analysis_block_mse(res, t_res, args):
 
             layer_mse_dict[name].append(mse.item())
 
-        for name in layer_mse_dict:
-            mse_values = layer_mse_dict[name]
-            min_mse = min(mse_values)
-            avg_mse = sum(mse_values) / len(mse_values)
-            logger.info(f"{name} output min_mse : {min_mse} avg_mse : {avg_mse}")
+    for name in layer_mse_dict:
+        mse_values = layer_mse_dict[name]
+        min_mse = min(mse_values)
+        avg_mse = sum(mse_values) / len(mse_values)
+        logger.info(f"{name} output min_mse : {min_mse} avg_mse : {avg_mse}")
+        if 'down_proj' in name:
+            t_average_blk_mse[name] = avg_mse
 
+def analysis_block_out_mse(res, t_res, blk):
+    global t_average_blk_out_mse
+    mse_sim = nn.MSELoss()
+
+    mses = []
+    for i in range(len(res)):
+        oups = res[i]
+        t_oups = t_res[i]
+        for j in range(oups.shape[0]):
+            mse = mse_sim(oups[j].float().view(1, -1), t_oups[j].float().view(1, -1))
+            mses.append(mse.item()) 
+
+    avg_mse = sum(mses) / len(mses)
+    t_average_blk_out_mse[blk] = avg_mse
+
+def analysis_block_out_cosine(res, t_res, blk):
+    global t_average_blk_out_cos
+    cosine_sim = nn.CosineSimilarity()
+
+    coss = []
+    for i in range(len(res)):
+        oups = res[i]
+        t_oups = t_res[i]
+
+        for j in range(oups.shape[0]):
+            cos = cosine_sim(oups[j].float().view(1, -1), t_oups[j].float().view(1, -1))
+            coss.append(cos.item())
+    avg_cos = sum(coss) / len(coss)
+    t_average_blk_out_cos[blk] = avg_cos
+
+def estimate_entropy_knn_pytorch(data, k=5):
+    """
+    使用 PyTorch GPU 并行化 kNN 熵估计
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    batch_size, sequence_length, hidden_dim = data.shape
+    flattened_data = data.reshape(-1, hidden_dim).float().to(device)
+
+    # 🔧 计算距离矩阵（L2 距离）
+    dist_matrix = torch.cdist(flattened_data, flattened_data, p=2)
+
+    # 🔧 取 k+1 最小距离（去掉自己）
+    knn_distances, _ = torch.topk(dist_matrix, k + 1, largest=False)
+    radii = knn_distances[:, 1:]  # 去掉自身距离
+
+    avg_log_radius = torch.mean(torch.log(radii[:, -1] + 1e-10))
+    n = flattened_data.shape[0]
+    d = hidden_dim
+
+    # 🔧 熵计算（数值稳定）
+    entropy = (d * avg_log_radius) + (d / 2) * torch.log(torch.tensor(np.pi)) - torch.lgamma(torch.tensor(d / 2 + 1)) + torch.log(torch.tensor(n)) - torch.log(torch.tensor(k))
+    return entropy.item()
+
+def analysis_block_out_entropy(res, t_res, blk, k=25):
+    global t_average_blk_out_entropy
+    ents = []
+    for i in range(len(res)):
+        oups = res[i]
+
+        for j in range(oups.shape[0]):
+            ent = estimate_entropy_knn_pytorch(oups, k=25)
+            ents.append(ent)
+    avg_ent = sum(ents) / len(ents)
+    t_average_blk_out_entropy[blk] = avg_ent    
 
 def avg_k_a(a, k):
     result = (a[:, None] * k[None, :]).sum(dim=0)
@@ -416,6 +486,14 @@ input_tensors = {}
 t_input_tensors = {}
 result_tensors = {}
 t_result_tensors = {}
+t_average_blk_cos = {}
+t_average_blk_mse = {}
+t_average_blk_out_cos = {}
+t_average_blk_out_mse = {}
+t_sorted_cos_dec = []
+t_average_blk_out_entropy = {}
+
+t_sorted_mse_dec = []
 
 org_weight = {}
 trans_weight = {}
@@ -477,12 +555,30 @@ class block_config:
                     tmp_bit = tmp_bit + 1
                 return None
 
+    def step_group(self, group_size):
+        found = False
+        for tmp_index in range(self.trying_config,len(self.configs[self.bits[self.trying_bit]])):
+            if self.configs[self.bits[self.trying_bit]][tmp_index][0]['weight']['group_size'] == group_size:
+                self.trying_config = tmp_index
+                found = True
+        if not found:
+            print(f"wrong group size to find {group_size}")
+            sys.exit(1)
+
     def get(self):
         if self.bit_index >= 0 and self.config_index >= 0:
             return self.configs[self.bits[self.bit_index]][self.config_index]
         else:
+            print(f'get None {self.bit_index} {self.config_index} {self.bits} {self.configs}')
             return None
-
+        
+    def get_one(self, bit, idx=0):
+        for b in self.bits:
+            if bit == b and len(self.bits[bit]) >= idx:
+                return self.configs[bit][idx]
+            else:
+                return None
+        
     def set(self, good=False):
         # set the reuslt every time get a new try
         if good:
@@ -615,6 +711,8 @@ def construct_mix_setting(
     }
     if act_config is not None:
         mix_setting["act"] = act_config
+    else:
+        mix_setting["act"] = mix_setting["weight"].copy()
     return mix_setting
 
 
@@ -622,6 +720,14 @@ def construct_skip_quant_mix_setting(layer_name):
     mix_setting = {"layer_name": [layer_name], "do_quant": False}
     return mix_setting
 
+def construct_f8_quant_mix_setting(layer_name, a_config):
+    aconfig = copy.deepcopy(a_config)
+    aconfig.bit = "e4m3"
+    if aconfig.get("group_size", None) is not None and int(aconfig.get("group_size", None)) > 0:
+        mix_setting = construct_mix_setting(layer_name, True, "e4m3", True, aconfig.get("granularity", "per_channel"), aconfig.get("group_size", -1), "float-quant", "minmax", True, aconfig)
+    else:
+        mix_setting = construct_mix_setting(layer_name, True, "e4m3", True, "per_channel", -1, "float-quant", "minmax", True, aconfig)
+    return mix_setting
 
 def construct_skip_o_gate_proj_setting(blks, o_gate="o_proj"):
     l_name = ""
@@ -630,8 +736,15 @@ def construct_skip_o_gate_proj_setting(blks, o_gate="o_proj"):
     l_name = f"{o_gate}#{l_name[1:]}"
     return construct_skip_quant_mix_setting(l_name)
 
+def construct_f8_o_gate_proj_setting(blks, a_config, o_gate="o_proj"):
+    l_name = ""
+    for b in blks:
+        l_name = f"{l_name}-{b}"
+    l_name = f"{o_gate}#{l_name[1:]}"
+    return construct_f8_quant_mix_setting(l_name, a_config)
 
-def try_skip_o_gate(config, target_acc, oprj_or_gate="o_proj"):
+
+def try_better_o_gate(config, target_acc, oprj_or_gate="o_proj", try_float=False, fast_mode=False):
     blk_cnt = get_block_count(config)
     t_config = copy.deepcopy(config)
     s_idx = 0
@@ -640,12 +753,20 @@ def try_skip_o_gate(config, target_acc, oprj_or_gate="o_proj"):
         s_idx = 0
     else:
         s_idx = len(t_config.quant.mix_bits)
-    t_config.quant.mix_bits[f"setting_{s_idx}"] = construct_skip_o_gate_proj_setting(
-        range(blk_cnt), oprj_or_gate
-    )
-    acc = opt_model(t_config, save=False, eval=True)[0]
-    if acc < target_acc:
-        return True, t_config.quant.mix_bits
+    if try_float:
+        t_config.quant.mix_bits[f"setting_{s_idx}"] = construct_skip_o_gate_proj_setting(
+            range(blk_cnt), oprj_or_gate
+        )
+    else: # try float 8
+        t_config.quant.mix_bits[f"setting_{s_idx}"] = construct_f8_o_gate_proj_setting(
+            range(blk_cnt), t_config.quant.get("act", {}), oprj_or_gate
+        )
+    if not fast_mode:
+        acc = opt_model(t_config, save=False, eval=True)[0]
+        if acc < target_acc:
+            return True, t_config.quant.mix_bits
+        else:
+            return False, t_config.quant.mix_bits
     else:
         return False, t_config.quant.mix_bits
 
@@ -1016,7 +1137,7 @@ def construct_search_configs_v3(
                             "float-quant",
                             "minmax",
                             True,
-                            act_config,
+                            None,
                         )
                     else:
                         if init_weight_dtype == "float-quant":
@@ -1030,7 +1151,7 @@ def construct_search_configs_v3(
                                 "float-quant",
                                 "minmax",
                                 True,
-                                act_config,
+                                None,
                             )
                         else:
                             _config = construct_mix_setting(
@@ -1047,6 +1168,7 @@ def construct_search_configs_v3(
                             )
                     layer_config.append(_config)
                 _block_config.add_config(bit, layer_config)
+                print(f'CONSTRUCT {bit} {layer_config}')
             if len(_block_config.bits) > 0:
                 block_configs[blk_idx] = _block_config
     return block_configs
@@ -1175,8 +1297,12 @@ def objective(param):
     else:
         skip_idx = 0
         t_config.quant.mix_bits = {}
+    print(f'objective {blks} {block_configs}')
     for b in blks:
+        print(f'blk {b} config {block_configs[b].get()}')
         config_ = block_configs[b].get()
+        if config_ is None:
+            print(f'bits {block_configs[b].bits} {block_configs[b].bit_index} {block_configs[b].config_index} {block_configs[b].configs}')
         for cfg in config_:
             tmp_setting = f"setting_{skip_idx}"
             t_config.quant.mix_bits[tmp_setting] = cfg
@@ -1316,16 +1442,16 @@ def crossover(p1, p2, r_cross=0.9):
     return [c1, c2]
 
 
-def mutation(block_num, blocks, r_mut):
+def mutation(block_num, start_block, blocks, r_mut):
     for i in range(len(blocks)):
         if np.random.rand() < r_mut:
-            tmp_blk = np.random.randint(block_num)
+            tmp_blk = np.random.randint(block_num)+start_block
             while True:
                 if tmp_blk not in blocks:
                     blocks[i] = tmp_blk
                     break
                 else:
-                    tmp_blk = np.random.randint(block_num)
+                    tmp_blk = np.random.randint(block_num)+start_block
 
 
 # v3 is to try genetic algo to search the best config
@@ -1337,6 +1463,8 @@ def search_configs_v3(
     block_num,
     try_blocks,
     mix_float=False,
+    front_blocks = 0,
+    end_blocks = 0
 ):
     found = False
     block_num = len(block_configs)
@@ -1345,10 +1473,16 @@ def search_configs_v3(
         b = block_configs[i]
         b.step_bit()
         b.set(good=True)
+    if front_blocks > 0 or end_blocks > 0:
+        front_blocks = block_num * front_blocks // 100
+        end_blocks = block_num * end_blocks // 100
+    all_blocks = [x for x in list(np.arange(front_blocks, block_num)) if x not in list(np.arange(block_num - end_blocks, block_num))]
+    block_num = len(all_blocks)
+    
     POP = 16
     BLKS = try_blocks
     CROSS = 0.9
-    GEN = 10
+    GEN = 5
     # MUT = 1.0/BLKS
     MUT = (
         0.0004  # about 5% mutation for all population when select 6 blocks and popu 16
@@ -1360,22 +1494,21 @@ def search_configs_v3(
     use_mp = False
 
     for i in range(POP):
-        popu.append(sorted(list(np.random.randint(block_num, size=BLKS))))
+        popu.append(sorted(list(np.random.randint(block_num, size=BLKS)+front_blocks)))
     for i in range(POP):
         for j in range(len(popu[i])):
             if popu[i].count(popu[i][j]) > 1:
-                tmp_blk = np.random.randint(block_num)
+                tmp_blk = np.random.randint(block_num)+front_blocks
                 while True:
                     if tmp_blk not in popu[i]:
                         popu[i][j] = tmp_blk
                         break
                     else:
-                        tmp_blk = np.random.randint(block_num)
+                        tmp_blk = np.random.randint(block_num)+front_blocks
         popu[i] = sorted(popu[i])
 
     # import pdb;pdb.set_trace()
     while generation < GEN:
-        # import pdb;pdb.set_trace()
         accs = []
         if not use_mp:
             for i in range(POP):
@@ -1419,7 +1552,7 @@ def search_configs_v3(
         for i in range(0, POP, 2):
             p1, p2 = selected[i], selected[i + 1]
             for c in crossover(p1, p2, CROSS):
-                mutation(block_num, c, MUT)
+                mutation(block_num, front_blocks, c, MUT)
                 drop_dup = False
                 if drop_dup:
                     dup_ = False
@@ -1465,13 +1598,64 @@ def search_configs_v3(
     results = [{"acc": best, "config": best_cfg}] + accs[1:]
     return found, results
 
+# v3 is to try genetic algo to try worst cos/mse blocks
+def search_configs_v4(
+    config,
+    block_configs,
+    dec,
+    target_acc,
+    block_num,
+    try_blocks,
+    mix_float=False,
+    front_blocks = 0,
+    end_blocks = 0
+):
+    found = False
+    block_num = len(block_configs)
+    for i in range(block_num):
+        # init the configs to use upper bitwidth, per channel
+        b = block_configs[i]
+        b.step_bit()
+        b.step_group(config.quant.act.get("group_size", -1))
+        b.set(good=True)
+    if front_blocks > 0 or end_blocks > 0:
+        front_blocks = block_num * front_blocks // 100
+        end_blocks = block_num * end_blocks // 100
+    all_blocks = [x for x in list(np.arange(front_blocks, block_num)) if x not in list(np.arange(block_num - end_blocks, block_num))]
+    print(f'all blocks {all_blocks}')
+    block_num = len(all_blocks)
+    blks = []
+    for i in range(len(dec)):
+        if dec[i][0] in all_blocks:
+            blks.append(dec[i][0])
+            if len(blks) >= try_blocks:
+                break
+    if mix_float:
+        acc, mix = objective_float((0, blks, block_configs, config))
+    else:
+        acc, mix = objective((0, blks, block_configs, config))
+    if acc < target_acc:
+        found = True
+    else:
+        found = False
+    results = [{"acc": acc, "config": mix}]
+    return found, results
 
 def main(config, args):
     transformed, init_config = check_init_model_and_config(config)
+    ALGO = ["grid", "topk", "genetic", "topk-cos-dec", "topk-mse-dec", "topk-entropy-inc"]
+    # algo = "genetic"
+    algo = "topk-entropy-inc"
+    if algo == "topk-entropy-inc" or algo == "topk-mse-dec" or algo == "topk-cos-dec":
+        analysis = True
+        init_config.quant.quant_out = False
+    else:
+        analysis = False
     t_config = copy.deepcopy(init_config)
     if transformed:
         args.entry_eval = True
     # t_save_path = f'{t_save_path}/transformed_model'
+    config = init_config
     t_config.model.path = t_config.model.t_path
     config.eval.eval_pos = "fake_quant"
     t_config.eval.eval_pos = "transform"
@@ -1549,80 +1733,123 @@ def main(config, args):
             fp_inps = model.get_first_block_input()
             t_fp_inps = t_model.get_first_block_input()
 
-            with torch.no_grad():
-                global t
-                global input_tensors
-                global t_input_tensors
-                global result_tensors
-                global t_result_tensors
-                global org_weight
-                global trans_weight
-                # for i in tqdm(range(len(model.blocks))):
-                for i in range(len(model.blocks)):
-                    block = model.blocks[i]
-                    t_block = t_model.blocks[i]
-                    block.cuda()
-                    t_block.cuda()
+            if analysis:
+                with torch.no_grad():
+                    global t
+                    global input_tensors
+                    global t_input_tensors
+                    global result_tensors
+                    global t_result_tensors
+                    global org_weight
+                    global trans_weight
+                    global t_average_blk_out_cos
+                    global t_average_blk_out_mse
+                    t_average_blk_out_cos = [1.0] * len(model.blocks)
+                    t_average_blk_out_mse = [0] * len(model.blocks)
+                    # for i in tqdm(range(len(model.blocks))):
+                    for i in range(len(model.blocks)):
+                        block = model.blocks[i]
+                        t_block = t_model.blocks[i]
+                        block.cuda()
+                        t_block.cuda()
 
-                    # t_hooks = register_hook(t_block, i, args)
-                    t_hooks = register_full_hook(t_block, i, args)
-                    t = True
-                    t_fp_inps["data"] = t_blockwise_opt.block_forward(t_block)
+                        # t_hooks = register_hook(t_block, i, args)
+                        t_hooks = register_full_hook(t_block, i, args)
+                        t = True
+                        t_fp_inps["data"] = t_blockwise_opt.block_forward(t_block)
 
-                    # hooks = register_hook(block, i, args)
-                    hooks = register_full_hook(block, i, args)
-                    t = False
-                    fp_inps["data"] = blockwise_opt.block_forward(block)
+                        # hooks = register_hook(block, i, args)
+                        hooks = register_full_hook(block, i, args)
+                        t = False
+                        fp_inps["data"] = blockwise_opt.block_forward(block)
 
-                    block.cpu()
-                    t_block.cpu()
+                        block.cpu()
+                        t_block.cpu()
 
-                    for h in hooks:
-                        h.remove()
+                        for h in hooks:
+                            h.remove()
 
-                    for t_h in t_hooks:
-                        t_h.remove()
+                        for t_h in t_hooks:
+                            t_h.remove()
 
-                    # if args.cosine:
-                    #     analysis_block_cosine(res, t_res, args)
-                    # else:
-                    #     analysis_block_outlier(res, t_res, org_w, trans_w, t_blockwise_opt.wquantizer, args)
-                    analysis_block_cosine(
-                        input_tensors, t_input_tensors, args, is_input=True
-                    )
-                    analysis_block_cosine(
-                        result_tensors, t_result_tensors, args, is_input=False
-                    )
-                    analysis_block_mse(result_tensors, t_result_tensors, args)
-                    analysis_block_outlier(
-                        result_tensors,
-                        t_result_tensors,
-                        org_weight,
-                        trans_weight,
-                        t_blockwise_opt.wquantizer,
-                        args,
-                    )
-                    analysis_input_kur(input_tensors, t_input_tensors, args)
+                        # if args.cosine:
+                        #     analysis_block_cosine(res, t_res, args)
+                        # else:
+                        #     analysis_block_outlier(res, t_res, org_w, trans_w, t_blockwise_opt.wquantizer, args)
+                        analysis_block_cosine(
+                            input_tensors, t_input_tensors, args, is_input=True
+                        )
+                        analysis_block_cosine(
+                            result_tensors, t_result_tensors, args, is_input=False
+                        )
+                        analysis_block_mse(result_tensors, t_result_tensors, args)
+                        analysis_block_outlier(
+                            result_tensors,
+                            t_result_tensors,
+                            org_weight,
+                            trans_weight,
+                            t_blockwise_opt.wquantizer,
+                            args,
+                        )
+                        analysis_input_kur(input_tensors, t_input_tensors, args)
 
-                    input_tensors.clear()
-                    t_input_tensors.clear()
-                    result_tensors.clear()
-                    t_result_tensors.clear()
-                    org_weight.clear()
-                    trans_weight.clear()
+                        analysis_block_out_mse(fp_inps['data'], t_fp_inps['data'], i)
+                        analysis_block_out_cosine(fp_inps['data'], t_fp_inps['data'], i)
+                        analysis_block_out_entropy(fp_inps['data'], t_fp_inps['data'], i)
 
-                    gc.collect()
-                    torch.cuda.empty_cache()
+                        input_tensors.clear()
+                        t_input_tensors.clear()
+                        result_tensors.clear()
+                        t_result_tensors.clear()
+                        org_weight.clear()
+                        trans_weight.clear()
+
+                        gc.collect()
+                        torch.cuda.empty_cache()
+                dec = [0]*len(t_average_blk_cos.keys())
+                blk_out_metric = True
+                t_sorted_cos_dec = [0] * len(t_average_blk_cos.keys())
+                t_sorted_mse_dec = [0] * len(t_average_blk_cos.keys())
+                t_sorted_ent_inc = [0] * len(t_average_blk_cos.keys())
+                if not blk_out_metric:
+                    for name in t_average_blk_cos.keys():
+                        idx = int(name[6:].split(".")[0])
+                        dec[idx] = t_average_blk_cos[name]
+                        print(f'average block {idx} {name} output cosine {t_average_blk_cos[name]}')
+                    for blk in range(1, len(dec)):
+                        t_sorted_cos_dec[blk] = dec[blk] - dec[blk - 1]
+                        print(f'dec of cos in blk {blk} is {dec[blk]-dec[blk-1]}')
+                    dec = [0]*len(t_average_blk_cos.keys())
+                    for name in t_average_blk_mse.keys():
+                        idx = int(name[6:].split(".")[0])
+                        dec[idx] = t_average_blk_mse[name]
+                        t_sorted_mse_dec[idx] = dec[idx]
+                        print(f'average block {idx} {name} output mse {t_average_blk_mse[name]}')
+                else:
+                    for blk in range(1,len(t_average_blk_out_cos)):
+                        t_sorted_cos_dec[blk] = t_average_blk_out_cos[blk] - t_average_blk_out_cos[blk-1]
+                        # t_sorted_mse_dec[blk] = t_average_blk_out_mse[blk] - t_average_blk_out_mse[blk-1]
+                        t_sorted_mse_dec[blk] = t_average_blk_out_mse[blk]
+                        t_sorted_ent_inc[blk] = t_average_blk_out_entropy[blk] - t_average_blk_out_entropy[blk-1]
+                t_sorted_cos_dec = sorted(enumerate(t_sorted_cos_dec),key=lambda x: x[1], reverse=True)
+                t_sorted_mse_dec = sorted(enumerate(t_sorted_mse_dec),key=lambda x: x[1], reverse=True)
+                t_sorted_ent_inc = sorted(enumerate(t_sorted_ent_inc),key=lambda x: x[1], reverse=True)
+                print(f'sorted cos dec {t_sorted_cos_dec}')
+                print(f'sorted mse dec {t_sorted_mse_dec}')
+                print(f'sorted ent inc {t_sorted_ent_inc}')
 
         del model
         del t_model
 
     logger.info(f"now to search optimization by sensitivity")
 
-    ALGO = ["grid", "topk", "genetic"]
-    algo = "genetic"
+    # pretrained_ppl = 17.191104888916016 # qwen 0.5B
     target_acc = pretrained_ppl * (1.0 + args.acc_threshold)
     print(f"target ppl is {target_acc}")
+
+    config.quant.quant_out = True
+    t_config.quant.quant_out = True
+    print(f"set quant output true {yaml.dump(easydict_to_dict(t_config),indent=4,sort_keys=False)}")
 
     if algo == "topk" or algo == "grid":
         sorted_sens = get_block_sensitivity(t_config)
@@ -1635,7 +1862,7 @@ def main(config, args):
         # pretrained_ppl = 7.493585586547852 # llama 7b
         block_loss = [(x[0], pretrained_ppl * 2) for x in sorted_sens]
         block_idx, acc = sorted_sens[0]
-    elif algo == "genetic":
+    elif algo == "genetic" or algo == "topk-cos-dec" or algo == "topk-mse-dec" or algo == "topk-entropy-inc":
         if (
             config.quant.weight.get("quant_type", None) is not None
             and config.quant.weight.quant_type == "int-quant"
@@ -1649,9 +1876,9 @@ def main(config, args):
                         True  # int 8 quant is hard to implement with f8 act, use float
                     )
         tmp_config = copy.deepcopy(t_config)
-        if args.float_oproj:
-            print(f"now to try skip o")
-            met, c = try_skip_o_gate(tmp_config, target_acc, "o_proj")
+        if args.elevate_oproj:
+            print(f"now to try elevate o")
+            met, c = try_better_o_gate(tmp_config, target_acc, "o_proj", try_float=args.mix_float, fast_mode=args.fast_mode)
             if tmp_config.quant.get("mix_bits", None) is not None:
                 del tmp_config.quant["mix_bits"]
             tmp_config.quant.mix_bits = c
@@ -1660,31 +1887,74 @@ def main(config, args):
                     f"found config meet acc requirement: {yaml.dump(easydict_to_dict(tmp_config),indent=4,sort_keys=False)}"
                 )
                 return
-        if args.float_gateproj:
-            print(f"now to try skip gate")
-            met, c = try_skip_o_gate(tmp_config, target_acc, "gate_proj")
+        if args.elevate_gateproj:
+            print(f"now to try elevate gate")
+            met, c = try_better_o_gate(tmp_config, target_acc, "gate_proj", try_float=args.mix_float, fast_mode=args.fast_mode)
             tmp_config.quant.mix_bits = c
             if met:
                 print(
                     f"found config meet acc requirement: {yaml.dump(easydict_to_dict(tmp_config),indent=4,sort_keys=False)}"
                 )
                 return
-        if args.float_qkv:
+        if args.elevate_qkv:
             blk_cnt = get_block_count(tmp_config)
+            print(f"now to try elevate attention qkv")
             for op in ["q_proj", "k_proj", "v_proj"]:
                 s_idx = len(tmp_config.quant.mix_bits)
-                tmp_config.quant.mix_bits[f"setting_{s_idx}"] = (
-                    construct_skip_o_gate_proj_setting(range(blk_cnt), op)
-                )
-            acc = opt_model(tmp_config, save=False, eval=True)[0]
-            if acc < target_acc:
-                print(
-                    f"found config meet acc requirement: {yaml.dump(easydict_to_dict(tmp_config),indent=4,sort_keys=False)}"
-                )
-                return
-        if config.quant.get("mix_bits", None) is None:
+                if args.mix_float:
+                    tmp_config.quant.mix_bits[f"setting_{s_idx}"] = (
+                        construct_skip_o_gate_proj_setting(range(blk_cnt), op)
+                    )
+                else:
+                    tmp_config.quant.mix_bits[f"setting_{s_idx}"] = (
+                        construct_f8_o_gate_proj_setting(range(blk_cnt), tmp_config.quant.get("act", {}), op)
+                    )
+            if not args.fast_mode:
+                acc = opt_model(tmp_config, save=False, eval=True)[0]
+                if acc < target_acc:
+                    print(
+                        f"found config meet acc requirement: {yaml.dump(easydict_to_dict(tmp_config),indent=4,sort_keys=False)}"
+                    )
+                    return
+        if args.elevate_front_blocks > 0 or args.elevate_end_blocks > 0:
+            blk_cnt = get_block_count(tmp_config)
+            elv_blks_f =  blk_cnt * args.elevate_front_blocks // 100
+            elv_blks_e = blk_cnt * args.elevate_end_blocks // 100
+            elv_blks = list(set(list(np.arange(elv_blks_f)) + list(np.arange(blk_cnt))[blk_cnt-elv_blks_e:]))
+            print(f"now to try elevate front {elv_blks_f} and end {elv_blks_e} blocks")
+            layer_names = [x for x in LLAMA_ATTENTION_OP + LLAMA_MLP_OP]
+            if args.elevate_oproj and "o_proj" in layer_names:
+                layer_names.remove("o_proj")
+            if args.elevate_gateproj and "gate_proj" in layer_names:
+                layer_names.remove("gate_proj")
+            if args.elevate_qkv and "q_proj" in layer_names:
+                layer_names.remove("q_proj")
+            if args.elevate_qkv and "k_proj" in layer_names:
+                layer_names.remove("k_proj")
+            if args.elevate_qkv and "v_proj" in layer_names:
+                layer_names.remove("v_proj")
+            for l in layer_names:
+                s_idx = 0 if tmp_config.quant.get("mix_bits",None) is None else len(tmp_config.quant.mix_bits)
+                if tmp_config.quant.get("mix_bits", None) is None:
+                    tmp_config.quant.mix_bits = {}
+                if args.mix_float:
+                    tmp_config.quant.mix_bits[f"setting_{s_idx}"] = (
+                        construct_skip_o_gate_proj_setting(elv_blks, l)
+                    )
+                else:
+                    tmp_config.quant.mix_bits[f"setting_{s_idx}"] = (
+                        construct_f8_o_gate_proj_setting(elv_blks, tmp_config.quant.get("act", {}), l)
+                    )
+            if not args.fast_mode:
+                acc = opt_model(tmp_config, save=False, eval=True)[0]
+                if acc < target_acc:
+                    print(
+                        f"found config meet acc requirement: {yaml.dump(easydict_to_dict(tmp_config),indent=4,sort_keys=False)}"
+                    )
+                    return
+        if config.quant.get("mix_bits", None) is None and tmp_config.quant.get("mix_bits", None) is not None:
             config.quant.mix_bits = copy.deepcopy(tmp_config.quant.mix_bits)
-        else:
+        elif tmp_config.quant.get("mix_bits", None) is not None:
             m_idx = len(config.quant.mix_bits)
             for s in tmp_config.quant.mix_bits:
                 config.quant.mix_bits[f"setting_{m_idx}"] = tmp_config.quant.mix_bits[s]
@@ -1701,19 +1971,19 @@ def main(config, args):
             t_config, args.search_blocks, sorted_sens
         )
         print(f"sets to search {block_configs}")
-    elif algo == "genetic":
+    elif algo == "genetic" or algo == "topk-cos-dec" or algo == "topk-mse-dec" or algo == "topk-entropy-inc":
         block_configs = {}
         block_num = get_block_count(config)
         # not used if mix_float
         block_configs = construct_search_configs_v3(
-            t_config,
+            config,
             block_num,
             block_configs,
-            except_o=args.float_oproj,
-            except_gate=args.float_gateproj,
-            except_qkv=args.float_qkv,
+            except_o=args.elevate_oproj,
+            except_gate=args.elevate_gateproj,
+            except_qkv=args.elevate_qkv,
         )
-        print(f"sets to search in genetic {block_configs}")
+        print(f"sets to search in genetic topk-cos/mse-dec {block_configs}")
     else:
         print(f"not support this algo yet")
         sys.exit(1)
@@ -1767,6 +2037,46 @@ def main(config, args):
             block_num,
             args.search_blocks,
             mix_float=args.mix_float,
+            front_blocks=args.elevate_front_blocks,
+            end_blocks=args.elevate_end_blocks
+        )
+        if len(search_results) > 0:
+            m_config = copy.deepcopy(config)
+            m_config.quant["mix_bits"] = search_results[0]["config"]
+            if met:
+                print(
+                    f"found config meet acc requirement: {yaml.dump(easydict_to_dict(m_config),indent=4,sort_keys=False)}"
+                )
+            else:
+                acc = search_results[0]["acc"]
+                print(
+                    f"did not find config meet acc requirement, the best {acc}: {yaml.dump(easydict_to_dict(m_config),indent=4,sort_keys=False)}"
+                )
+        else:
+            m_config = None
+        print(f"search result: {search_results}")
+    elif algo == "topk-cos-dec" or algo == "topk-mse-dec" or algo == "topk-entropy-inc":
+        if algo == "topk-cos-dec":
+            dec = t_sorted_cos_dec
+        elif algo == "topk-mse-dec":
+            dec = t_sorted_mse_dec
+        elif algo == "topk-entropy-inc":
+            dec = t_sorted_ent_inc
+        else:
+            print(f"not support this algo yet")
+        print(
+            f"base config before search: {yaml.dump(easydict_to_dict(config),indent=4,sort_keys=False)}"
+        )
+        met, search_results = search_configs_v4(
+            config,
+            block_configs,
+            dec,
+            target_acc,
+            block_num,
+            args.search_blocks,
+            mix_float=args.mix_float,
+            front_blocks=args.elevate_front_blocks,
+            end_blocks=args.elevate_end_blocks
         )
         if len(search_results) > 0:
             m_config = copy.deepcopy(config)
@@ -1808,7 +2118,7 @@ if __name__ == "__main__":
         help="find the most serious n blocks to try",
     )
     parser.add_argument(
-        "--acc_threshold", type=float, default=0.01, help="percentage of ppl increase"
+        "--acc_threshold", type=float, default=0.02, help="percentage of ppl increase"
     )
     parser.add_argument(
         "--mix_float",
@@ -1816,19 +2126,36 @@ if __name__ == "__main__":
         help="mix sensitive bloks with float but not 8bit",
     )
     parser.add_argument(
-        "--float_oproj",
+        "--elevate_oproj",
         action="store_true",
-        help="use float for all o_proj ops before further search",
+        help="use higher acc for all o_proj ops before further search",
     )
     parser.add_argument(
-        "--float_gateproj",
+        "--elevate_gateproj",
         action="store_true",
-        help="use float for all gate_proj ops before further search",
+        help="use higher acc for all gate_proj ops before further search",
     )
     parser.add_argument(
-        "--float_qkv",
+        "--elevate_qkv",
         action="store_true",
-        help="use float for all qkv_proj ops before further search",
+        help="use higher acc for all qkv_proj ops before further search",
+    )
+    parser.add_argument(
+        "--elevate_front_blocks",
+        type=int,
+        default=0,
+        help="use higher acc for front % blocks before further search",
+    )
+    parser.add_argument(
+        "--elevate_end_blocks",
+        type=int,
+        default=0,
+        help="use higher acc for front % blocks before further search",
+    )
+    parser.add_argument(
+        "--fast_mode",
+        action="store_true",
+        help="take all parameters to effect and eval together",
     )
 
     parser.add_argument("--online_rotate", action="store_true")
